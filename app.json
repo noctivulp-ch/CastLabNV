@@ -1,0 +1,91 @@
+{
+  "expo": {
+    "name": "CastLab",
+    "slug": "CastLab",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.fedilab.castlab",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "This app requires local network access to discover DLNA devices."
+      },
+      "icon": {
+        "dark": "./assets/ios_dark.png",
+        "light": "./assets/ios_light.png",
+        "tinted": "./assets/ios_tinted.png"
+      }
+    },
+    "android": {
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true,
+      "blockedPermissions": [],
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/android_foreground.png",
+        "monochromeImage": "./assets/android_monochrome.png"
+      },
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE"
+      ],
+      "package": "app.fedilab.castlab"
+    },
+    "web": {
+      "favicon": "./assets/ec_favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-asset",
+        {
+          "assets": [
+            "./assets",
+            "./assets/webroot"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/icon.png",
+          "imageWidth": 200
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification.png",
+          "color": "#ffffff",
+          "defaultChannel": "default",
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos.",
+          "savePhotosPermission": "Allow $(PRODUCT_NAME) to save photos.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      "expo-asset",
+      "expo-sqlite"
+    ]
+  }
+}
