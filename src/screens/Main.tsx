@@ -16,7 +16,6 @@ import AlbumScreen from "./AlbumScreen";
 import {Device} from '../DLNACast/types/Device';
 import {useSelector} from "react-redux";
 import CastDevicesPopup from "../componants/popup/CastDevicesPopup";
-import Alert from "../componants/alert/Alert";
 import {SERVER_PORT} from "../constants/Values";
 import StaticServer, {getActiveServer, resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
 import * as Network from "expo-network";
@@ -28,6 +27,7 @@ import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
 import {useCastManager} from "../contexts/castManager-context";
 import {Directory, Paths} from "expo-file-system";
+import Toast from "../componants/alert/Toast";
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -47,9 +47,13 @@ const Main: React.FC = () => {
     const Stack = createNativeStackNavigator<RootStackParamList>();
     const i18n = initTranslate();
     const [alertVisible, setAlertVisible] = useState<boolean>(false);
+    const [toastVisible, setToastVisible] = useState<boolean>(false);
+    const [snackbarVisible, setSnackbarVisible] = useState<boolean>(false);
     const [playerVisible, setPlayerVisible] = useState<boolean>(false);
     const [alertTitle, setAlertTitle] = useState<string>("");
     const [alertMessage, setAlertMessage] = useState<string>("");
+    const [toastText1, setToastText1] = useState<string>("");
+    const [toastText2, setToastText2] = useState<string>("");
     const [castDialogVisible, setCastDialogVisible] = useState(false);
     const cast = useSelector((state: IRootState) => state.cast);
     const expo = SQLite.openDatabaseSync('db.db');
@@ -65,8 +69,9 @@ const Main: React.FC = () => {
 
     useEffect(() => {
         if (error) {
-            setAlertMessage(error);
-            setAlertVisible(true);
+            setToastText1(error);
+            setToastText2("");
+            setToastVisible(true);
         }
     }, [error]);
 
@@ -235,8 +240,8 @@ const Main: React.FC = () => {
                                   setCastDialogVisible(false)
                               }}/>
 
-            <Alert title={alertTitle} message={alertMessage} visible={alertVisible}
-                   hideDialog={() => setAlertVisible(false)}/>
+            <Toast type={"info"} text1={toastText1} text2={toastText2} visible={toastVisible}
+                   onToastHide={() => setToastVisible(false)}/>
             <PlayerController visible={playerVisible}/>
         </PaperProvider>
     );
