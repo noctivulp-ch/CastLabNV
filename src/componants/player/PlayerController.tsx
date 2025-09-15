@@ -1,22 +1,24 @@
 import * as React from 'react';
 import {useContext, useEffect} from 'react';
-import {IconButton, Portal} from 'react-native-paper';
+import {Card, IconButton, Portal} from 'react-native-paper';
 import {initTranslate} from "../../localization/translate";
-import {Image, StyleSheet, View} from "react-native";
+import {StyleSheet, View} from "react-native";
 import {ThemeContext} from "../../contexts/theme-context";
 import {useSelector} from "react-redux";
 import {IRootState} from "../../screens/Main";
 import {Asset} from "expo-media-library";
 import Slider from "@react-native-community/slider";
 import {useCastManager} from "../../contexts/castManager-context";
+import {Device} from "../../DLNACast/types/Device";
 
 
 interface PlayerControllerProps {
     visible: boolean,
+    connectedDevice: Device | null
 }
 
 
-const PlayerController: React.FC<PlayerControllerProps> = ({visible}) => {
+const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDevice}) => {
     const {theme} = useContext(ThemeContext);
     const i18n = initTranslate();
     const cast = useSelector((state: IRootState) => state.cast);
@@ -68,47 +70,51 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible}) => {
         <Portal>
             {visible &&
                 <View style={styles.container}>
-                    {asset && <Image source={{uri: asset.uri}} style={styles.image}/>}
-                    <Slider
-                        thumbTintColor={theme.colors.primary}
-                        maximumTrackTintColor={theme.colors.primary}
-                        minimumTrackTintColor={theme.colors.primary}
-                        style={styles.progress}
-                        value={progress}
-                        onValueChange={handleSeekTo}
-                        maximumValue={playbackState?.duration}
-                        step={1}
-                    />
-                    <View style={styles.controller}>
-                        <IconButton
-                            icon="skip-backward"
-                            size={24}
-                            onPress={() => handleSeekTo(0)}
+                    <Card style={styles.card}>
+                        {connectedDevice &&
+                            <Card.Title title={connectedDevice.name} subtitle={asset?.filename}/>}
+                        <Slider
+                            thumbTintColor={theme.colors.primary}
+                            maximumTrackTintColor={theme.colors.primary}
+                            minimumTrackTintColor={theme.colors.primary}
+                            style={styles.progress}
+                            value={progress}
+                            onValueChange={handleSeekTo}
+                            maximumValue={playbackState?.duration}
+                            step={1}
                         />
-                        <IconButton
-                            icon="skip-previous"
-                            size={24}
-                            onPress={() => handleSeekAdd(-5)}
+                        <View style={styles.controller}>
+                            <IconButton
+                                icon="skip-backward"
+                                size={24}
+                                onPress={() => handleSeekTo(0)}
+                            />
+                            <IconButton
+                                icon="skip-previous"
+                                size={24}
+                                onPress={() => handleSeekAdd(-5)}
 
-                        />
-                        <IconButton
-                            icon={playIcon}
-                            size={48}
-                            onPress={handlePlayPause}
-                        />
-                        <IconButton
-                            icon="skip-next"
-                            size={24}
-                            onPress={() => handleSeekAdd(5)}
-                        />
-                        <IconButton
-                            icon="skip-forward"
-                            size={24}
-                            onPress={() => {
-                            }}
-                        />
+                            />
+                            <IconButton
+                                icon={playIcon}
+                                size={48}
+                                onPress={handlePlayPause}
+                            />
+                            <IconButton
+                                icon="skip-next"
+                                size={24}
+                                onPress={() => handleSeekAdd(5)}
+                            />
+                            <IconButton
+                                icon="skip-forward"
+                                size={24}
+                                onPress={() => {
+                                }}
+                            />
 
-                    </View>
+                        </View>
+
+                    </Card>
                 </View>
             }
         </Portal>
@@ -121,7 +127,11 @@ const useStyles = (theme: any) => (StyleSheet.create({
         position: 'absolute',
         width: '100%',
         bottom: 50,
-        backgroundColor: theme.colors.background,
+        backgroundColor: "transparent",
+    },
+    card: {
+        flexDirection: 'column',
+        marginHorizontal: 10
     },
     image: {
         width: "100%",
@@ -130,7 +140,6 @@ const useStyles = (theme: any) => (StyleSheet.create({
         marginTop: 10
     },
     controller: {
-        marginTop: 10,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
@@ -139,6 +148,7 @@ const useStyles = (theme: any) => (StyleSheet.create({
     slider: {
         width: "100%",
         height: 50,
+
     }
 }));
 export default PlayerController;

@@ -244,7 +244,7 @@ const Main: React.FC = () => {
 
             <Toast type={"info"} text1={toastText1} text2={toastText2} visible={toastVisible}
                    onToastHide={() => setToastVisible(false)}/>
-            <PlayerController visible={playerVisible}/>
+            <PlayerController visible={playerVisible} connectedDevice={connectedDevice}/>
         </PaperProvider>
     );
 }
