@@ -123,10 +123,12 @@ const Main: React.FC = () => {
     }, [castManager]);
 
     const buttonCastPressed = async () => {
-
         if (castManager.isConnected()) {
             await castManager.disconnect();
         } else {
+            if (!castManager.isSearching()) {
+                castManager.startSearch();
+            }
             setCastDialogVisible(true);
         }
     };
