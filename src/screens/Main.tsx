@@ -27,6 +27,7 @@ import * as SQLite from "expo-sqlite";
 import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
 import {useCastManager} from "../contexts/castManager-context";
+import {Directory, Paths} from "expo-file-system";
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -125,6 +126,17 @@ const Main: React.FC = () => {
         }
     };
 
+    /**
+     * Delete files from local server
+     */
+    const deleteFiles = () => {
+        const dir = new Directory(Paths.document, "webroot");
+        const contents = dir.list();
+        for (const item of contents) {
+            item.delete();
+        }
+    }
+
     useEffect(() => {
         const currentServer = getActiveServer();
         if (connectedDevice == null && currentServer) {
@@ -183,7 +195,7 @@ const Main: React.FC = () => {
     }, [connectedDevice]);
 
     useEffect(() => {
-
+        deleteFiles();
         //Start discovering
         if (!isIOS) { //iOS will request a permission when starting the app, bette is to give this permission when tapping on the cast button
             castManager.startSearch();
@@ -194,6 +206,7 @@ const Main: React.FC = () => {
 
         return () => {
             themeListener.remove();
+            deleteFiles();
         }
 
     }, []);

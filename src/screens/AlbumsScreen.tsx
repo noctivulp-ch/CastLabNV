@@ -22,13 +22,26 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation}) => {
 
 
     const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+
     const getAlbums: () => Promise<Album[]> = async () => {
+
         if (permissionResponse?.status !== 'granted') {
-            await requestPermission();
+            requestPermission().then(permissionResponse => {
+                if (permissionResponse.status === 'granted') {
+                    return fetchGalleries();
+                }
+                return [];
+            });
         }
+        return fetchGalleries();
+    }
+
+
+    const fetchGalleries = async () => {
         const albums = await MediaLibrary.getAlbumsAsync({
             includeSmartAlbums: true,
         });
+        //Sort albums with number of media inside (DESC)
         albums.sort((a, b) => a.assetCount > b.assetCount ? -1 : 1);
         return albums;
     }
@@ -40,7 +53,6 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation}) => {
             setAppIsReady(true);
         })();
     }, []);
-
 
     if (!appIsReady) {
         return (
