@@ -36,3 +36,5 @@ An app that allows to cast gallery media through DLNA protocol
 3. Filter media with date ranges
 4. More settings like automatic loading next media
 5. Player controller in a notification when the app is in background
+6. Remove mode debug
+7. Prepare the FDroid version (prod)

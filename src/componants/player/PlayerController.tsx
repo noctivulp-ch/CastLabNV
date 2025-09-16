@@ -75,52 +75,57 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                             <View style={styles.titleContainer}>
                                 <View style={styles.title}>
                                     <Text style={styles.titleTop}>{connectedDevice.name}</Text>
-                                    <Text style={styles.titleBottom}>{asset?.filename}</Text>
+                                    {asset?.filename && <Text style={styles.titleBottom}>{asset?.filename}</Text>}
                                 </View>
                                 <Image source={{uri: asset?.uri}} width={80}/>
                             </View>
                         }
-                        <Slider
-                            thumbTintColor={theme.colors.primary}
-                            maximumTrackTintColor={theme.colors.primary}
-                            minimumTrackTintColor={theme.colors.primary}
-                            style={styles.progress}
-                            value={progress}
-                            onValueChange={handleSeekTo}
-                            maximumValue={playbackState?.duration}
-                            step={1}
-                        />
-                        <View style={styles.controller}>
-                            <IconButton
-                                icon="skip-backward"
-                                size={24}
-                                onPress={() => handleSeekTo(0)}
-                            />
-                            <IconButton
-                                icon="skip-previous"
-                                size={24}
-                                onPress={() => handleSeekAdd(-5)}
+                        {asset &&
+                            <View style={{flexDirection: "column"}}>
+                                <Slider
+                                    thumbTintColor={theme.colors.primary}
+                                    maximumTrackTintColor={theme.colors.primary}
+                                    minimumTrackTintColor={theme.colors.primary}
+                                    style={styles.progress}
+                                    value={progress}
+                                    onValueChange={handleSeekTo}
+                                    maximumValue={playbackState?.duration}
+                                    step={1}
+                                />
+                                <View style={styles.controller}>
+                                    <IconButton
+                                        icon="skip-backward"
+                                        size={24}
+                                        onPress={() => handleSeekTo(0)}
+                                    />
+                                    <IconButton
+                                        icon="skip-previous"
+                                        size={24}
+                                        onPress={() => handleSeekAdd(-5)}
 
-                            />
-                            <IconButton
-                                icon={playIcon}
-                                size={48}
-                                onPress={handlePlayPause}
-                            />
-                            <IconButton
-                                icon="skip-next"
-                                size={24}
-                                onPress={() => handleSeekAdd(5)}
-                            />
-                            <IconButton
-                                icon="skip-forward"
-                                size={24}
-                                onPress={() => {
-                                }}
-                            />
-
-                        </View>
-
+                                    />
+                                    <IconButton
+                                        icon={playIcon}
+                                        size={48}
+                                        onPress={handlePlayPause}
+                                    />
+                                    <IconButton
+                                        icon="skip-next"
+                                        size={24}
+                                        onPress={() => handleSeekAdd(5)}
+                                    />
+                                    <IconButton
+                                        icon="skip-forward"
+                                        size={24}
+                                        onPress={() => {
+                                        }}
+                                    />
+                                </View>
+                            </View>
+                        }
+                        {!asset &&
+                            <Text style={styles.description}>{i18n.t('select_media')}</Text>
+                        }
                     </Card>
                 </View>
             }
@@ -145,6 +150,13 @@ const useStyles = (theme: any) => (StyleSheet.create({
         justifyContent: 'space-between',
         marginHorizontal: 10,
         marginTop: 10
+    },
+    description: {
+        flexDirection: 'row',
+        fontSize: 16,
+        margin: 10,
+        justifyContent: 'center',
+        alignItems: 'center'
     },
     title: {
         flexDirection: 'column',

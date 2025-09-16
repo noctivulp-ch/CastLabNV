@@ -37,6 +37,7 @@
     "day_night": "Day/Night"
   },
   "about": "About",
+  "select_media": "Tap on a media to start casting on your device",
   "error": {
     "single": "Error",
     "noNetwork": "No network connection",
