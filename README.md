@@ -27,3 +27,12 @@ An app that allows to cast gallery media through DLNA protocol
 
 - `cd android/app`
 - `gradle assembleRelease`
+
+## TODO
+
+1. Remove the direct dependency to "react-native" 0.79.4 when this issue is
+   solved (https://github.com/callstack/react-native-paper/issues/4763)
+2. Allow to create playlists
+3. Filter media with date ranges
+4. More settings like automatic loading next media
+5. Player controller in a notification when the app is in background

@@ -25,6 +25,18 @@
   "reset": "Reset",
   "width": "Width",
   "height": "Height",
+  "contextual_menu": "Contextual menu",
+  "change_theme": "Change theme",
+  "report_bugs": "Report bugs",
+  "version": "Version {{version}}",
+  "source_code": "Source code",
+  "donations": "Donations",
+  "theme_type": {
+    "dark": "Dark",
+    "light": "Light",
+    "day_night": "Day/Night"
+  },
+  "about": "About",
   "error": {
     "single": "Error",
     "noNetwork": "No network connection",

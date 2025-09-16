@@ -1,8 +1,8 @@
 import * as React from 'react';
 import {useContext, useEffect} from 'react';
-import {Card, IconButton, Portal} from 'react-native-paper';
+import {Card, IconButton, Portal, Text} from 'react-native-paper';
 import {initTranslate} from "../../localization/translate";
-import {StyleSheet, View} from "react-native";
+import {Image, StyleSheet, View} from "react-native";
 import {ThemeContext} from "../../contexts/theme-context";
 import {useSelector} from "react-redux";
 import {IRootState} from "../../screens/Main";
@@ -72,7 +72,14 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                 <View style={styles.container}>
                     <Card style={styles.card}>
                         {connectedDevice &&
-                            <Card.Title title={connectedDevice.name} subtitle={asset?.filename}/>}
+                            <View style={styles.titleContainer}>
+                                <View style={styles.title}>
+                                    <Text style={styles.titleTop}>{connectedDevice.name}</Text>
+                                    <Text style={styles.titleBottom}>{asset?.filename}</Text>
+                                </View>
+                                <Image source={{uri: asset?.uri}} width={80}/>
+                            </View>
+                        }
                         <Slider
                             thumbTintColor={theme.colors.primary}
                             maximumTrackTintColor={theme.colors.primary}
@@ -132,6 +139,22 @@ const useStyles = (theme: any) => (StyleSheet.create({
     card: {
         flexDirection: 'column',
         marginHorizontal: 10
+    },
+    titleContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginHorizontal: 10,
+        marginTop: 10
+    },
+    title: {
+        flexDirection: 'column',
+    },
+    titleTop: {
+        fontSize: 18,
+        fontWeight: 'bold',
+    },
+    titleBottom: {
+        marginTop: 5
     },
     image: {
         width: "100%",

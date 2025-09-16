@@ -1,10 +1,10 @@
-import {PaperProvider} from "react-native-paper";
+import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-native-paper";
 import {NavigationContainer} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen from "./AlbumsScreen";
 import {combineReducers} from "@reduxjs/toolkit";
-import {Appearance, GestureResponderEvent, Platform} from "react-native";
+import {Appearance, GestureResponderEvent, Linking, Platform} from "react-native";
 import {SETTINGS_THEME} from "../constants/AsyncStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {StatusBar} from "expo-status-bar";
@@ -26,8 +26,9 @@ import * as SQLite from "expo-sqlite";
 import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
 import {useCastManager} from "../contexts/castManager-context";
-import {Directory, Paths} from "expo-file-system";
 import Toast from "../componants/alert/Toast";
+import app from "../../app.json";
+import * as FileSystem from 'expo-file-system';
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -43,12 +44,11 @@ const isIOS = Platform.OS === 'ios';
 
 
 const Main: React.FC = () => {
-    const {setTheme, theme, statusBarTheme} = useContext(ThemeContext);
+    const {setTheme, theme, statusBarTheme, type: themeType} = useContext(ThemeContext);
     const Stack = createNativeStackNavigator<RootStackParamList>();
     const i18n = initTranslate();
     const [alertVisible, setAlertVisible] = useState<boolean>(false);
     const [toastVisible, setToastVisible] = useState<boolean>(false);
-    const [snackbarVisible, setSnackbarVisible] = useState<boolean>(false);
     const [playerVisible, setPlayerVisible] = useState<boolean>(false);
     const [alertTitle, setAlertTitle] = useState<string>("");
     const [alertMessage, setAlertMessage] = useState<string>("");
@@ -59,7 +59,8 @@ const Main: React.FC = () => {
     const expo = SQLite.openDatabaseSync('db.db');
     const db = drizzle(expo);
     const {success} = useMigrations(db, migrations);
-
+    const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
+    const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const {castManager, devices, error, connectedDevice, isConnected} = useCastManager();
 
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
@@ -126,9 +127,10 @@ const Main: React.FC = () => {
         if (castManager.isConnected()) {
             await castManager.disconnect();
         } else {
-            if (!castManager.isSearching()) {
-                castManager.startSearch();
+            if (castManager.isSearching()) {
+                await castManager.stopSearch();
             }
+            castManager.startSearch();
             setCastDialogVisible(true);
         }
     };
@@ -137,13 +139,18 @@ const Main: React.FC = () => {
      * Delete files from local server
      */
     const deleteFiles = () => {
-        const dir = new Directory(Paths.document, "webroot");
-        const contents = dir.list();
-        for (const item of contents) {
-            item.delete();
-        }
+        FileSystem.readDirectoryAsync(FileSystem.documentDirectory + "webroot").then(uris => {
+            for (const uri of uris) {
+                FileSystem.deleteAsync(uri);
+            }
+        });
     }
-
+    const displayAppInfo = () => {
+        setAboutDialogVisible(true);
+    }
+    const displayThemePicker = () => {
+        setThemeDialogVisible(true);
+    }
     useEffect(() => {
         const currentServer = getActiveServer();
         if (connectedDevice == null && currentServer) {
@@ -217,7 +224,6 @@ const Main: React.FC = () => {
         }
 
     }, []);
-
     return (
         <PaperProvider theme={theme}>
             <NavigationContainer theme={statusBarTheme}>
@@ -226,7 +232,8 @@ const Main: React.FC = () => {
                     gestureEnabled: true,
                     title: i18n.t('albums'),
                     header: (props) => <CustomAppBar {...props} onButtonCastPressed={buttonCastPressed}
-                                                     castManager={castManager}/>,
+                                                     castManager={castManager}
+                                                     infoPress={displayAppInfo} themePressed={displayThemePicker}/>,
                 }}>
                     <Stack.Screen name="Albums" component={AlbumsScreen}
                                   options={{headerShown: true}}/>
@@ -245,6 +252,63 @@ const Main: React.FC = () => {
             <Toast type={"info"} text1={toastText1} text2={toastText2} visible={toastVisible}
                    onToastHide={() => setToastVisible(false)}/>
             <PlayerController visible={playerVisible} connectedDevice={connectedDevice}/>
+            <Portal>
+                <Dialog visible={aboutDialogVisible} onDismiss={() => {
+                    setAboutDialogVisible(false)
+                }}>
+                    <Dialog.Content style={{alignItems: "center"}}>
+                        <Text variant="titleLarge">CastLab</Text>
+                        <Text variant="labelLarge" style={{
+                            marginTop: 10
+                        }}>{i18n.t('version', {version: app.expo.version})}</Text>
+                        <Text variant="bodyLarge"
+                              style={{marginTop: 20}}>{i18n.t('source_code')}</Text>
+                        <Text
+                            onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab')}
+                            style={{
+                                marginTop: 10,
+                                color: theme.colors.primary
+                            }}>https://codeberg.org/tom79/CastLab</Text>
+                        <Text variant="bodyLarge"
+                              style={{marginTop: 20}}>{i18n.t('report_bugs')}</Text>
+                        <Text
+                            onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab/issues')}
+                            style={{
+                                marginTop: 10,
+                                color: theme.colors.primary
+                            }}>https://codeberg.org/tom79/CastLab/issues</Text>
+                        <Text variant="bodyLarge"
+                              style={{marginTop: 20}}>{i18n.t('donations')}</Text>
+                        <Text
+                            onPress={() => Linking.openURL('https://fedilab.app/page/donations/')}
+                            style={{
+                                marginTop: 10,
+                                color: theme.colors.primary
+                            }}>https://fedilab.app/page/donations/</Text>
+
+                    </Dialog.Content>
+                    <Dialog.Actions>
+                        <Button onPress={() => setAboutDialogVisible(false)}>{i18n.t('close')}</Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
+            <Portal>
+                <Dialog visible={themeDialogVisible} onDismiss={() => {
+                    setThemeDialogVisible(false)
+                }}>
+                    <Dialog.Title>{i18n.t('change_theme')}</Dialog.Title>
+                    <Dialog.Content>
+                        <RadioButton.Group onValueChange={value => setTheme(value)} value={themeType}>
+                            <RadioButton.Item label={i18n.t('theme_type.light')} value="light"/>
+                            <RadioButton.Item label={i18n.t('theme_type.dark')} value="dark"/>
+                            <RadioButton.Item label={i18n.t('theme_type.day_night')} value="auto"/>
+                        </RadioButton.Group>
+                    </Dialog.Content>
+                    <Dialog.Actions>
+                        <Button onPress={() => setThemeDialogVisible(false)}>{i18n.t('close')}</Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
         </PaperProvider>
     );
 }
