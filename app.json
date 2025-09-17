@@ -87,6 +87,11 @@
       ],
       "expo-asset",
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "461fe6cd-74d4-4b82-a38f-4a1e4ee3b76e"
+      }
+    }
   }
 }
