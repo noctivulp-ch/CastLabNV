@@ -88,7 +88,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                     minimumTrackTintColor={theme.colors.primary}
                                     style={styles.progress}
                                     value={progress}
-                                    onValueChange={handleSeekTo}
+                                    onValueChange={(newValue) => handleSeekTo.bind(this, newValue)}
                                     maximumValue={playbackState?.duration}
                                     step={1}
                                 />

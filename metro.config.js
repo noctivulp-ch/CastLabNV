@@ -2,5 +2,5 @@ const {getDefaultConfig} = require('expo/metro-config');
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 config.resolver.sourceExts.push('sql');
-//config.resolver.assetExts = [...config.resolver.assetExts, ...["html", "txt", "js"]];
+config.resolver.assetExts = [...config.resolver.assetExts, ...["html", "png"]];
 module.exports = config;

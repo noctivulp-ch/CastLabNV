@@ -60,7 +60,9 @@
     "disconnect": "Disconnect error: {{message}}",
     "invalidSsdpResponse": "Invalid SSDP response: {{message}}",
     "unknownDeviceType": "Unknown device type: {{message}}",
-    "dlnaSoap": "DLNA SOAP action failed: {{message}}"
+    "dlnaSoap": "DLNA SOAP action failed: {{message}}",
+    "httpServer": "HTTP Server error: {{message}}",
+    "httpServerStart": "HTTP Server Start error: {{message}}"
   },
   "disconnect": "Disconnect"
 }
