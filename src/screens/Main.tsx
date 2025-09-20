@@ -1,6 +1,6 @@
 import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-native-paper";
 import {NavigationContainer} from "@react-navigation/native";
-import React, {useCallback, useContext, useEffect, useState} from "react";
+import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen from "./AlbumsScreen";
 import {combineReducers} from "@reduxjs/toolkit";
@@ -16,10 +16,10 @@ import AlbumScreen from "./AlbumScreen";
 import {Device} from '../DLNACast/types/Device';
 import {useSelector} from "react-redux";
 import CastDevicesPopup from "../componants/popup/CastDevicesPopup";
-import {SERVER_PORT} from "../constants/Values";
-import StaticServer, {getActiveServer, resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
+import { SERVER_PORT, UPNP_PORT} from "../constants/Values";
+import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
 import * as Network from "expo-network";
-import {copyFile, exists, mkdir} from "@dr.pogodin/react-native-fs";
+import {copyFile, downloadFile, exists} from "@dr.pogodin/react-native-fs";
 import {useMigrations} from "drizzle-orm/expo-sqlite/migrator";
 import migrations from "../../drizzle/migrations";
 import * as SQLite from "expo-sqlite";
@@ -29,6 +29,8 @@ import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
 import app from "../../app.json";
 import * as FileSystem from 'expo-file-system';
+import {MediaServer} from "../DLNACast/MediaServer";
+import {Asset as ExpoAsset} from 'expo-asset';
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -62,6 +64,9 @@ const Main: React.FC = () => {
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const {castManager, devices, error, connectedDevice, isConnected} = useCastManager();
+    const prevConnectedDevice = useRef(connectedDevice);
+    const serverRef = useRef<StaticServer | null>(null);
+    const mediaServerRef = useRef<MediaServer | null>(null);
 
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
         setTheme(value ? value : "auto");
@@ -71,6 +76,7 @@ const Main: React.FC = () => {
     useEffect(() => {
         if (error) {
             setToastText1(error);
+            console.error(error);
             setToastText2("");
             setToastVisible(true);
         }
@@ -86,9 +92,9 @@ const Main: React.FC = () => {
             if (cast?.currentAsset) {
                 let uri;
                 const asset: Asset = cast.currentAsset;
-                const album_id = asset?.albumId?.replace("\"", "").replace("'", "");
+                const album_id = asset?.albumId?.replace("\"", "").replace("'", "").replace("-", "");
                 //We include album ID if a file as the same name in a different album
-                const serverFileName = encodeURIComponent((album_id ? album_id + "_" : "") + asset.filename.replace("\"", "").replace("'", ""));
+                const serverFileName = encodeURIComponent((album_id && album_id.length > 0 ? album_id + "_" : "") + asset.filename.replace("\"", "").replace("'", ""));
                 const fileDir = resolveAssetsPath("webroot");
                 //We check the file was not previously copied to fileDir
                 if (!await exists(fileDir + "/" + serverFileName)) {
@@ -135,78 +141,152 @@ const Main: React.FC = () => {
         }
     };
 
-    /**
-     * Delete files from local server
-     */
-    const deleteFiles = () => {
-        FileSystem.readDirectoryAsync(FileSystem.documentDirectory + "webroot").then(uris => {
-            for (const uri of uris) {
-                FileSystem.deleteAsync(uri);
-            }
-        });
-    }
+    /** Delete all files from the server directory */
+    const deleteFiles = async () => {
+        // Directory for storing server files
+        const SERVER_FILE_DIRECTORY = `${FileSystem.documentDirectory}webroot/`;
+        try {
+            // Clear directory
+            await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, { idempotent: true });
+            await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, { intermediates: true });
+        } catch (error) {
+            console.error('Error in deleteFiles:', error);
+        }
+    };
+
     const displayAppInfo = () => {
         setAboutDialogVisible(true);
     }
     const displayThemePicker = () => {
         setThemeDialogVisible(true);
     }
-    useEffect(() => {
-        const currentServer = getActiveServer();
-        if (connectedDevice == null && currentServer) {
-            (async () => {
-                await currentServer?.stop();
-            })();
-            return;
-        }
-        const extraConfig = `server.modules += ("mod_setenv")
-              setenv.add-response-header = (
-                "transferMode.dlna.org" => "Streaming",
-                "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000",
-                "Access-Control-Allow-Origin" => "*",
-                "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD",
-                "Accept-Ranges" => "bytes"
-              )
-        `;
-        const fileDir = resolveAssetsPath("webroot");
-        let server = new StaticServer({
-            fileDir,
-            extraConfig: extraConfig,
-            port: SERVER_PORT,
-            nonLocal: true,
-            stopInBackground: false,
-            errorLog: {
-                conditionHandling: true,
-                fileNotFound: true,
-                requestHandling: true,
-                requestHeader: true,
-                requestHeaderOnError: true,
-                responseHeader: true,
-                timeouts: true,
-            },
-        });
 
-        (async () => {
-            await currentServer?.stop();
-            if (!await exists(fileDir)) {
-                await mkdir(fileDir);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const startServers = async () => {
+            const currentServer = serverRef.current;
+            const currentMediaServer = mediaServerRef.current;
+
+            // Stop servers if connectedDevice is null
+            if (!connectedDevice) {
+                try {
+                    if (currentServer) {
+                        await currentServer.stop();
+                    }
+                    if (currentMediaServer) {
+                        await currentMediaServer.stop();
+                    }
+                    serverRef.current = null;
+                    mediaServerRef.current = null;
+                } catch (err) {
+                    console.error('Error stopping servers:', (err as Error).message);
+                }
+                return;
             }
-            server?.addStateListener((newState, details, error) => {
-                /* console.log(
-                     `Server #${serverId}.\n`,
-                     `Origin: ${server?.origin}`,
-                     `New state: "${STATES[newState]}".\n`,
-                     `Details: "${details}".`,
-                 );*/
-                if (error) console.error(error);
-            });
-            const res = await server?.start();
-            console.log(`Server started: ${res}`);
-        })();
+
+            // Skip if servers are already running and connectedDevice hasn't changed
+            if (
+                connectedDevice === prevConnectedDevice.current &&
+                currentServer &&
+                currentMediaServer
+            ) {
+                return;
+            }
+
+            try {
+                const ip = await Network.getIpAddressAsync();
+                const fileDir = resolveAssetsPath('webroot');
+                const extraConfig = `server.modules += ("mod_setenv")
+                    setenv.add-response-header = (
+                        "transferMode.dlna.org" => "Streaming",
+                        "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000",
+                        "Access-Control-Allow-Origin" => "*",
+                        "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD",
+                        "Accept-Ranges" => "bytes"
+                    )
+                    server.modules += ("mod_dirlisting")
+                    dir-listing.activate="enable"`;
+
+                // Copy favicon.png to webroot/icon.png
+                const favicon = ExpoAsset.fromModule(require("../../assets/favicon.png"));
+                const iconPath = `${fileDir}/icon.png`;
+                try {
+                    const faviconInfo = await FileSystem.getInfoAsync(iconPath);
+                    if (!faviconInfo.exists) {
+                        await downloadFile({fromUrl: favicon.uri, toFile: iconPath});
+                    }
+                } catch (err) {
+                    console.error('Error when loading favicon:', (err as Error).message);
+                }
+
+                if (isMounted) {
+                    // Stop existing servers before starting new ones
+                    if (currentServer) {
+                        await currentServer.stop();
+                    }
+                    if (currentMediaServer) {
+                        await currentMediaServer.stop();
+                    }
+
+                    serverRef.current = new StaticServer({
+                        fileDir,
+                        extraConfig,
+                        port: SERVER_PORT,
+                        nonLocal: true,
+                        stopInBackground: false,
+                        hostname: ip,
+                        errorLog: {
+                            conditionHandling: true,
+                            fileNotFound: true,
+                            requestHandling: true,
+                            requestHeader: true,
+                            requestHeaderOnError: true,
+                            responseHeader: true,
+                            timeouts: true,
+                        },
+                    });
+
+                    mediaServerRef.current = new MediaServer(UPNP_PORT, 'CastLab');
+                    await serverRef.current.start();
+
+                   // await mediaServerRef.current.start(ip);
+
+                    serverRef.current.addStateListener((newState, details, error) => {
+                        if (error) console.error('StaticServer error:', error);
+                        console.log('StaticServer state:', details);
+                    });
+                }
+            } catch (err) {
+                console.error('Error starting servers:', (err as Error).message);
+            }
+        };
+
+        startServers();
+        prevConnectedDevice.current = connectedDevice;
+
         return () => {
-            server?.stop();
-        }
+            isMounted = false;
+            (async () => {
+                const stopPromises = [];
+                if (serverRef.current) {
+                    stopPromises.push(
+                        serverRef.current.stop().catch((err: Error) => console.error('Error stopping StaticServer:', err.message))
+                    );
+                    serverRef.current = null;
+                }
+                if (mediaServerRef.current) {
+                    stopPromises.push(
+                        mediaServerRef.current.stop().catch((err: Error) => console.error('Error stopping MediaServer:', err.message))
+                    );
+                    mediaServerRef.current = null;
+                }
+                await Promise.all(stopPromises);
+            })();
+        };
     }, [connectedDevice]);
+
 
     useEffect(() => {
         deleteFiles();

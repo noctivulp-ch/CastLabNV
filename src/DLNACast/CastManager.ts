@@ -169,7 +169,9 @@ export class CastManager extends EventEmitter {
         }
         this.currentMediaUri = mediaInfo.contentUrl;
         try {
-            await this.dlnaSetAVTransportURI(mediaInfo.contentUrl);
+            // Build basic DIDL metadata for images/videos (helps DLNA renderers like Kodi)
+            const didlMetadata = this.buildDIDLMetadata(mediaInfo);
+            await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
             await this.dlnaPlay();
             this.emit('castingStarted');
         } catch (err) {
@@ -405,32 +407,50 @@ export class CastManager extends EventEmitter {
      */
     private async dlnaSoapAction(serviceType: string, action: string, body: string): Promise<any> {
         const device = this.currentDevice!;
-        const serviceUrl = `${device.location.replace(/\/desc\.xml$/, '')}${device.services![serviceType]}`;
-        const response = await fetch(serviceUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'text/xml; charset="utf-8"',
-                'SOAPACTION': `"${serviceType}#${action}"`,
-            },
-            body: this.wrapSoapBody(action, body),
-        });
-        if (!response.ok) {
-            this.emit('error', this.i18n.t('error.dlnaSoap', {message: `HTTP ${response.status}`}));
-            return;
+        // Fix potential double slashes in service URL
+        const baseUrl = device.location.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
+        const servicePath = device.services![serviceType].replace(/^\/+/, '');
+        const serviceUrl = `${baseUrl}/${servicePath}`;
+        try {
+            const response = await fetch(serviceUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/xml; charset="utf-8"',
+                    'SOAPACTION': `"${serviceType}#${action}"`,
+                },
+                body: this.wrapSoapBody(serviceType, action, body),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('SOAP error body:', errorText);
+                this.emit('error', this.i18n.t('error.dlnaSoap', {message: `HTTP ${response.status}: ${errorText}`}));
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+            const xml = await response.text();
+            const parsed = this.xmlParser.parse(xml);
+            if (!parsed || !parsed["s:Envelope"]?.["s:Body"]) {
+                console.error('Invalid SOAP response structure');
+                throw new Error("Invalid SOAP response structure");
+            }
+            return parsed['s:Envelope']['s:Body'];
+        } catch (err) {
+            console.error(`SOAP action ${action} failed:`, (err as Error).message);
+            throw err;
         }
-        const xml = await response.text();
-        const parsed = this.xmlParser.parse(xml);
-        if (!parsed || !parsed["s:Envelope"]?.["s:Body"]) {
-            throw new Error("Invalid SOAP response structure");
-        }
-        return parsed['s:Envelope']['s:Body'];
     }
 
-    private wrapSoapBody(action: string, body: string): string {
+    /**
+     * Wraps SOAP body dynamically based on serviceType.
+     * @param serviceType - The service type for namespace.
+     * @param action - The action name.
+     * @param body - The inner body.
+     * @returns SOAP envelope string.
+     */
+    private wrapSoapBody(serviceType: string, action: string, body: string): string {
         return `<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body>
-<u:${action} xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+<u:${action} xmlns:u="${serviceType}">
 ${body}
 </u:${action}>
 </s:Body>
@@ -438,11 +458,13 @@ ${body}
     }
 
     /**
-     * Sets the AVTransport URI for DLNA.
+     * Sets the AVTransport URI for DLNA with optional metadata.
      * @param uri - The media URI.
+     * @param metadata - DIDL metadata (optional, for images).
      */
-    private async dlnaSetAVTransportURI(uri: string): Promise<void> {
-        await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'SetAVTransportURI', `<InstanceID>0</InstanceID><CurrentURI>${uri}</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>`);
+    private async dlnaSetAVTransportURI(uri: string, metadata: string = ''): Promise<void> {
+        const escapedMetadata = metadata.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'SetAVTransportURI', `<InstanceID>0</InstanceID><CurrentURI>${uri}</CurrentURI><CurrentURIMetaData>${escapedMetadata}</CurrentURIMetaData>`);
     }
 
     /**
@@ -479,7 +501,7 @@ ${body}
      * Mutes or unmutes a DLNA device.
      * @param muted - True to mute, false to unmute.
      */
-    private async dlnaSetMute(muted: boolean): Promise<void> {
+    async dlnaSetMute(muted: boolean): Promise<void> {
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'SetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>${muted ? 1 : 0}</DesiredMute>`);
     }
 
@@ -555,4 +577,37 @@ ${body}
         }, 1000);
     }
 
+    /**
+     * Builds basic DIDL-Lite metadata for the media item (required for images and videos in DLNA)
+     * @param mediaInfo - Media info
+     * @returns DIDL XML string
+     */
+    private buildDIDLMetadata(mediaInfo: MediaInfo): string {
+        let upnpClass = 'object.item';
+        let protocolInfo = 'http-get:*:*:'; // Fallback
+        let mimeType = mediaInfo.contentType || '*';
+        if (mimeType.includes('image')) {
+            upnpClass = 'object.item.imageItem.photo';
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=${mimeType.includes('jpeg') ? 'JPEG_SM' : 'PNG_LRG'};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000`;
+        } else if (mimeType.includes('video')) {
+            upnpClass = 'object.item.videoItem';
+            // Use specific DLNA profile for MP4 (H.264/AAC is common)
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MPEG4_P2_MP4_ASP_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
+            // Add duration if available
+            if (mediaInfo.streamDuration) {
+                const durationSeconds = Math.floor(mediaInfo.streamDuration / 1000);
+                const h = Math.floor(durationSeconds / 3600);
+                const m = Math.floor((durationSeconds % 3600) / 60);
+                const s = durationSeconds % 60;
+                const durationStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                protocolInfo += `;DLNA.ORG_FLAGS=01500000000000000000000000000000`; // Streaming flags
+                return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${Date.now()}" parentID="0" restricted="true"><dc:title>${mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media'}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}" duration="${durationStr}">${mediaInfo.contentUrl}</res></item></DIDL-Lite>`;
+            }
+        }
+
+        // Use metadata.title if available, fallback to filename from contentUrl
+        const title = mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media';
+
+        return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${Date.now()}" parentID="0" restricted="true"><dc:title>${title}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}">${mediaInfo.contentUrl}</res></item></DIDL-Lite>`;
+    }
 }
