@@ -16,7 +16,7 @@ import AlbumScreen from "./AlbumScreen";
 import {Device} from '../DLNACast/types/Device';
 import {useSelector} from "react-redux";
 import CastDevicesPopup from "../componants/popup/CastDevicesPopup";
-import { SERVER_PORT, UPNP_PORT} from "../constants/Values";
+import {SERVER_PORT} from "../constants/Values";
 import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
 import * as Network from "expo-network";
 import {copyFile, downloadFile, exists} from "@dr.pogodin/react-native-fs";
@@ -29,7 +29,6 @@ import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
 import app from "../../app.json";
 import * as FileSystem from 'expo-file-system';
-import {MediaServer} from "../DLNACast/MediaServer";
 import {Asset as ExpoAsset} from 'expo-asset';
 
 const rootReducer = combineReducers({})
@@ -66,7 +65,6 @@ const Main: React.FC = () => {
     const {castManager, devices, error, connectedDevice, isConnected} = useCastManager();
     const prevConnectedDevice = useRef(connectedDevice);
     const serverRef = useRef<StaticServer | null>(null);
-    const mediaServerRef = useRef<MediaServer | null>(null);
 
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
         setTheme(value ? value : "auto");
@@ -147,8 +145,8 @@ const Main: React.FC = () => {
         const SERVER_FILE_DIRECTORY = `${FileSystem.documentDirectory}webroot/`;
         try {
             // Clear directory
-            await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, { idempotent: true });
-            await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, { intermediates: true });
+            await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, {idempotent: true});
+            await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, {intermediates: true});
         } catch (error) {
             console.error('Error in deleteFiles:', error);
         }
@@ -167,7 +165,6 @@ const Main: React.FC = () => {
 
         const startServers = async () => {
             const currentServer = serverRef.current;
-            const currentMediaServer = mediaServerRef.current;
 
             // Stop servers if connectedDevice is null
             if (!connectedDevice) {
@@ -175,23 +172,10 @@ const Main: React.FC = () => {
                     if (currentServer) {
                         await currentServer.stop();
                     }
-                    if (currentMediaServer) {
-                        await currentMediaServer.stop();
-                    }
                     serverRef.current = null;
-                    mediaServerRef.current = null;
                 } catch (err) {
                     console.error('Error stopping servers:', (err as Error).message);
                 }
-                return;
-            }
-
-            // Skip if servers are already running and connectedDevice hasn't changed
-            if (
-                connectedDevice === prevConnectedDevice.current &&
-                currentServer &&
-                currentMediaServer
-            ) {
                 return;
             }
 
@@ -226,10 +210,6 @@ const Main: React.FC = () => {
                     if (currentServer) {
                         await currentServer.stop();
                     }
-                    if (currentMediaServer) {
-                        await currentMediaServer.stop();
-                    }
-
                     serverRef.current = new StaticServer({
                         fileDir,
                         extraConfig,
@@ -248,10 +228,9 @@ const Main: React.FC = () => {
                         },
                     });
 
-                    mediaServerRef.current = new MediaServer(UPNP_PORT, 'CastLab');
                     await serverRef.current.start();
 
-                   // await mediaServerRef.current.start(ip);
+                    // await mediaServerRef.current.start(ip);
 
                     serverRef.current.addStateListener((newState, details, error) => {
                         if (error) console.error('StaticServer error:', error);
@@ -275,12 +254,6 @@ const Main: React.FC = () => {
                         serverRef.current.stop().catch((err: Error) => console.error('Error stopping StaticServer:', err.message))
                     );
                     serverRef.current = null;
-                }
-                if (mediaServerRef.current) {
-                    stopPromises.push(
-                        mediaServerRef.current.stop().catch((err: Error) => console.error('Error stopping MediaServer:', err.message))
-                    );
-                    mediaServerRef.current = null;
                 }
                 await Promise.all(stopPromises);
             })();

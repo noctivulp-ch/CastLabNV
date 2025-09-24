@@ -1,5 +1,5 @@
 import React from "react";
-import {GestureResponderEvent, Pressable, StyleSheet} from "react-native";
+import {GestureResponderEvent, Image, Pressable, StyleSheet} from "react-native";
 import {Icon, Text} from "react-native-paper";
 import {Device} from "../../DLNACast/types/Device";
 
@@ -15,9 +15,14 @@ const DeviceItem: React.FC<AssetItemProps> = ({device, onPressed}) => {
             onPressed(event, device);
         }}
                    style={({pressed}) => [pressed && styles.pressed, styles.container]}>
-            <Icon size={24}
-                  source={"television"}/><Text
-            style={styles.text}>{device.name}</Text>
+            {device.iconUrl &&
+                <Image width={24} height={24} source={{uri: device.iconUrl}}/>
+            }
+            {!device.iconUrl &&
+                <Icon size={24}
+                      source={"television"}/>
+            }
+            <Text style={styles.text}>{device.name}</Text>
         </Pressable>
     );
 }

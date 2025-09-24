@@ -38,6 +38,7 @@
   },
   "about": "About",
   "select_media": "Tap on a media to start casting on your device",
+  "seek_not_supported": "Manual seeking not supported by this device",
   "error": {
     "single": "Error",
     "noNetwork": "No network connection",
@@ -62,7 +63,15 @@
     "unknownDeviceType": "Unknown device type: {{message}}",
     "dlnaSoap": "DLNA SOAP action failed: {{message}}",
     "httpServer": "HTTP Server error: {{message}}",
-    "httpServerStart": "HTTP Server Start error: {{message}}"
+    "httpServerStart": "HTTP Server Start error: {{message}}",
+    "deviceUnreachable": "Device is not reachable. Make sure it's connected to the same network.",
+    "invalidMedia": "Invalid media format or URL",
+    "unsupportedFormat": "This media format is not supported by the device",
+    "seekPosition": "Cannot seek to this position",
+    "deviceBusy": "Device is temporarily unavailable. Please try again.",
+    "networkTimeout": "Network request timed out. Please check your connection.",
+    "mediaValidation": "Media validation failed: {{errors}}",
+    "temporaryFailure": "Temporary failure. The operation will retry automatically."
   },
   "disconnect": "Disconnect"
 }

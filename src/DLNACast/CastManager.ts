@@ -6,12 +6,17 @@ import {XMLParser} from "fast-xml-parser";
 import NetInfo from '@react-native-community/netinfo';
 import {Buffer} from 'buffer';
 import {initTranslate} from "../localization/translate";
+import {CastUtils} from './utils/CastUtils';
+import {CastConfig} from './config/CastConfig';
 
-// Constants for SSDP discovery
-const MULTICAST_ADDRESS = '239.255.255.250';
-const SSDP_PORT = 1900;
-const SEARCH_TARGET_ALL = 'ssdp:all';
-const DLNA_RENDERER_ST = 'urn:schemas-upnp-org:device:MediaRenderer:1';
+// Constants for SSDP discovery (from config)
+const MULTICAST_ADDRESS = CastConfig.MULTICAST_ADDRESS;
+const SSDP_PORT = CastConfig.SSDP_PORT;
+const SEARCH_TARGET_ALL = CastConfig.SEARCH_TARGET_ALL;
+const DLNA_RENDERER_ST = CastConfig.DLNA_RENDERER_ST;
+const CACHE_TTL = CastConfig.CACHE_TTL;
+const MAX_RETRY_ATTEMPTS = CastConfig.MAX_RETRY_ATTEMPTS;
+const REQUEST_TIMEOUT = CastConfig.REQUEST_TIMEOUT;
 
 export interface PlaybackState {
     position: number; // Current playback position in seconds
@@ -19,6 +24,11 @@ export interface PlaybackState {
     isPlaying: boolean; // Is media playing
     volume: number; // Volume (0-1)
     muted: boolean; // Mute state
+}
+
+interface CacheEntry {
+    data: any;
+    timestamp: number;
 }
 
 export class CastManager extends EventEmitter {
@@ -34,9 +44,16 @@ export class CastManager extends EventEmitter {
     private sessionListener: any = null; // Session listener subscription
     private mediaListener: any = null; // Media listener subscription
     private xmlParser = new XMLParser();
+    private soapCache = new Map<string, CacheEntry>(); // SOAP response cache
+    private currentPollInterval = CastConfig.DEFAULT_POLL_INTERVAL;
 
     constructor() {
         super();
+
+        // Clean up cache periodically
+        setInterval(() => {
+            this.cleanupCache();
+        }, CastConfig.CACHE_CLEANUP_INTERVAL);
     }
 
     /**
@@ -67,15 +84,19 @@ export class CastManager extends EventEmitter {
      * Starts searching for casting devices.
      * @param duration - Duration of the search in milliseconds.
      */
-    async startSearch(duration: number = 30000): Promise<void> {
+    async startSearch(duration: number = CastConfig.DEFAULT_SEARCH_DURATION): Promise<void> {
         if (this.searching) return;
+
         const state = await NetInfo.fetch();
         if (!state.isConnected) {
             this.emit('error', this.i18n.t('error.noNetwork'));
             return;
         }
+
         this.emit('searchStarted');
         this.searching = true;
+        this.devices.clear(); // Clear previous discoveries
+
         // Start SSDP
         this.socket = Udp.createSocket({type: 'udp4'});
         this.socket.bind(0, () => {
@@ -100,25 +121,26 @@ export class CastManager extends EventEmitter {
      */
     async stopSearch(): Promise<void> {
         if (!this.searching) return;
+
         this.searching = false;
-        if (this.timeout) clearTimeout(this.timeout);
+
+        if (this.timeout) {
+            clearTimeout(this.timeout);
+            this.timeout = null;
+        }
+
         if (this.socket) {
+            try {
+                this.socket.dropMembership(MULTICAST_ADDRESS);
+            } catch (err) {
+                console.warn('Error dropping membership:', err);
+            }
             this.socket.close();
             this.socket = null;
         }
+
         // Clean up listeners
-        if (this.castDeviceListener) {
-            this.castDeviceListener.remove();
-            this.castDeviceListener = null;
-        }
-        if (this.sessionListener) {
-            this.sessionListener.remove();
-            this.sessionListener = null;
-        }
-        if (this.mediaListener) {
-            this.mediaListener.remove();
-            this.mediaListener = null;
-        }
+        this.cleanupListeners();
         this.emit('searchStopped');
     }
 
@@ -127,8 +149,15 @@ export class CastManager extends EventEmitter {
      * @param device - The device to connect to.
      */
     async connect(device: Device): Promise<void> {
-        this.currentDevice = device;
         try {
+            // Verify device is still reachable
+            const isReachable = await this.checkDeviceReachability(device);
+            if (!isReachable) {
+                this.emit('error', this.i18n.t('error.deviceUnreachable'));
+                return;
+            }
+
+            this.currentDevice = device;
             this.startPolling();
             this.emit('connected', device);
         } catch (err) {
@@ -144,14 +173,18 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
         try {
             await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`);
+
             if (this.pollingInterval) {
                 clearInterval(this.pollingInterval);
                 this.pollingInterval = null;
             }
+
             this.currentDevice = null;
             this.currentMediaUri = null;
+            this.soapCache.clear(); // Clear cache on disconnect
             this.emit('disconnected');
         } catch (err) {
             this.emit('error', this.i18n.t('error.disconnect', {message: (err as Error).message}));
@@ -167,15 +200,39 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        // Validate media info
+        const validation = CastUtils.validateMediaInfo(mediaInfo);
+        if (!validation.isValid) {
+            this.emit('error', this.i18n.t('error.mediaValidation', {errors: validation.errors.join(', ')}));
+            return;
+        }
+
+        // Check if device supports this media type
+        if (!CastUtils.deviceSupportsMediaType(this.currentDevice, mediaInfo.contentType || '')) {
+            console.warn(`Device may not support media type: ${mediaInfo.contentType}`);
+        }
+
         this.currentMediaUri = mediaInfo.contentUrl;
+
         try {
-            // Build basic DIDL metadata for images/videos (helps DLNA renderers like Kodi)
+            // Clear cache before starting new media
+            this.soapCache.clear();
+
+            // Build basic DIDL metadata for images/videos
             const didlMetadata = this.buildDIDLMetadata(mediaInfo);
             await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
             await this.dlnaPlay();
+
+            // Reset progress to 0 when starting new media
+            this.emit('progressChanged', 0);
+
+            // Then get actual status after a brief delay
+            this.forceStatusUpdate();
+
             this.emit('castingStarted');
         } catch (err) {
-            this.emit('error', this.i18n.t('error.cast', {message: (err as Error).message}));
+            this.emit('error', this.i18n.t('error.cast', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
     }
 
@@ -188,8 +245,10 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return 0;
         }
+
         try {
-            const mediaInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`);
+            // Don't cache media info during polling
+            const mediaInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`, false);
             return this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse'].MediaDuration || '00:00:00');
         } catch (err) {
             this.emit('error', this.i18n.t('error.duration', {message: (err as Error).message}));
@@ -205,8 +264,11 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
         try {
             await this.dlnaPlay();
+            // Force immediate status update after play command
+            this.forceStatusUpdate();
         } catch (err) {
             this.emit('error', this.i18n.t('error.play', {message: (err as Error).message}));
         }
@@ -220,8 +282,11 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
         try {
             await this.dlnaPause();
+            // Force immediate status update after pause command
+            this.forceStatusUpdate();
         } catch (err) {
             this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
         }
@@ -236,10 +301,97 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        // Check if this device is already known to not support seek
+        if (this.currentDevice.capabilities?.includes('NoSeek')) {
+            console.log('Device known to not support seek - ignoring request');
+            return;
+        }
+
         try {
-            await this.dlnaSeek(this.secondsToTime(position));
+            // Validate seek position
+            if (position < 0) {
+                console.warn('Seek position cannot be negative, clamping to 0');
+                position = 0;
+            }
+
+            // Get current status for validation
+            const currentStatus = await this.dlnaGetStatus();
+            if (currentStatus.duration <= 0) {
+                console.warn('Cannot seek: No media duration available');
+                return;
+            }
+
+            if (position > currentStatus.duration) {
+                console.warn('Seek position beyond duration, clamping to duration');
+                position = currentStatus.duration;
+            }
+
+            // Don't seek if already at the target position
+            if (Math.abs(currentStatus.position - position) < 3) {
+                console.log('Already near target position, skipping seek');
+                return;
+            }
+
+            console.log(`Attempting seek from ${currentStatus.position}s to ${position}s`);
+
+            // Try standard DLNA seek
+            await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Seek', `<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>${this.secondsToTime(position)}</Target>`);
+
+            console.log('Seek command sent successfully');
+
+            // Update UI immediately for responsiveness
+            this.emit('progressChanged', position);
+
+            // Verify actual position after delay
+            setTimeout(async () => {
+                try {
+                    const updatedStatus = await this.dlnaGetStatus();
+                    this.emit('stateChanged', updatedStatus);
+                    this.emit('progressChanged', updatedStatus.position);
+                    console.log(`Seek result - Target: ${position}s, Actual: ${updatedStatus.position}s`);
+                } catch (err) {
+                    console.warn('Error verifying seek result:', err);
+                }
+            }, 1000);
+
         } catch (err) {
-            this.emit('error', this.i18n.t('error.seek', {message: (err as Error).message}));
+            const errorMessage = (err as Error).message;
+
+            // Handle specific DLNA error codes and mark device capabilities
+            if (errorMessage.includes('501') || errorMessage.includes('Action Failed') ||
+                errorMessage.includes('701') || errorMessage.includes('714')) {
+
+                console.log('Device does not support DLNA seek - marking as NoSeek');
+
+                // Mark this device as not supporting seek
+                if (this.currentDevice) {
+                    this.currentDevice.capabilities = this.currentDevice.capabilities || [];
+                    if (!this.currentDevice.capabilities.includes('NoSeek')) {
+                        this.currentDevice.capabilities.push('NoSeek');
+                    }
+                }
+
+                // Emit event to notify UI about capability change
+                this.emit('deviceCapabilityUpdated', this.currentDevice);
+
+                // Silently ignore - don't show error to user
+                return;
+            } else if (errorMessage.includes('711')) {
+                console.warn('Invalid seek target');
+                this.emit('error', this.i18n.t('error.seekPosition'));
+                return;
+            }
+
+            // For other errors, revert to current position
+            try {
+                const currentStatus = await this.dlnaGetStatus();
+                this.emit('progressChanged', currentStatus.position);
+            } catch {
+            }
+
+            console.warn('Seek failed with error:', errorMessage);
+            this.emit('error', this.i18n.t('error.seek', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
     }
 
@@ -252,6 +404,7 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
         try {
             await this.dlnaSetVolume(Math.round(volume * 100));
         } catch (err) {
@@ -268,6 +421,7 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
         try {
             await this.dlnaSetMute(muted);
         } catch (err) {
@@ -284,6 +438,7 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
+
         try {
             return await this.dlnaGetStatus();
         } catch (err) {
@@ -293,11 +448,33 @@ export class CastManager extends EventEmitter {
     }
 
     /**
+     * Checks if the current device supports seeking.
+     * @returns True if seeking is supported.
+     */
+    canSeek(): boolean {
+        if (!this.currentDevice) return false;
+
+        // Check if device is known to not support seek
+        return !this.currentDevice.capabilities?.includes('NoSeek');
+    }
+
+    /**
      * Get detected devices
      * @returns an array of Device
      */
     getDevices(): Device[] {
         return Array.from(this.devices.values());
+    }
+
+    /**
+     * Cleanup method to be called when the instance is no longer needed.
+     */
+    public cleanup(): void {
+        this.stopSearch();
+        this.disconnect();
+        this.soapCache.clear();
+        this.devices.clear();
+        this.removeAllListeners();
     }
 
     /**
@@ -324,31 +501,50 @@ export class CastManager extends EventEmitter {
      * @private
      */
     private async handleSsdpResponse(response: string, rinfo: any): Promise<void> {
-        const headers = this.parseHeaders(response);
-        const st = headers['ST'];
-        const location = headers['LOCATION'];
-        const usn = headers['USN']?.trim(); // Normalize USN
-
-        // Validate headers and check for duplicates early
-        if (!st || !location || !usn) {
-            this.emit('error', this.i18n.t('error.invalidSsdpResponse', {message: 'Missing ST, LOCATION, or USN'}));
-            return;
-        }
-        if (this.devices.has(usn)) return; // Skip if device already exists
-
-        // Only process DLNA devices
-        if (st !== DLNA_RENDERER_ST) {
-            return;
-        }
-
         try {
-            const descRes = await fetch(location);
-            const descXml = await descRes.text();
-            const parsed = this.xmlParser.parse(descXml);
-            if (!parsed || !parsed.root || !parsed.root.device) {
+            const headers = this.parseHeaders(response);
+            const st = headers['ST'];
+            const location = headers['LOCATION'];
+            const usn = headers['USN']?.trim();
+
+            // Validate headers and check for duplicates early
+            if (!st || !location || !usn) {
+                console.warn('Invalid SSDP response: missing ST, LOCATION, or USN');
                 return;
             }
-            const friendlyName = parsed.root.device?.friendlyName || 'Unknown Device';
+
+            if (this.devices.has(usn)) return; // Skip if device already exists
+
+            // Only process DLNA devices
+            if (st !== DLNA_RENDERER_ST) {
+                return;
+            }
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CastConfig.DESCRIPTION_TIMEOUT);
+
+            const descRes = await fetch(location, {
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!descRes.ok) {
+                console.warn(`Failed to fetch device description: ${descRes.status}`);
+                return;
+            }
+
+            const descXml = await descRes.text();
+            const parsed = this.xmlParser.parse(descXml);
+
+            if (!parsed?.root?.device) {
+                console.warn('Invalid device description XML');
+                return;
+            }
+
+            const deviceInfo = parsed.root.device;
+            const friendlyName = deviceInfo.friendlyName || 'Unknown Device';
+
             const device: Device = {
                 id: usn,
                 name: friendlyName,
@@ -356,12 +552,16 @@ export class CastManager extends EventEmitter {
                 ip: rinfo.address,
                 port: rinfo.port,
                 services: this.extractServices(parsed),
+                manufacturer: deviceInfo.manufacturer,
+                modelName: deviceInfo.modelName,
+                capabilities: this.extractCapabilities(deviceInfo),
+                iconUrl: await this.extractDeviceIcon(parsed, location),
             };
 
             this.devices.set(usn, device);
             this.emit('deviceAdded', device);
         } catch (err) {
-            this.emit('error', this.i18n.t('error.description', {message: (err as Error).message}));
+            console.warn('Error handling SSDP response:', (err as Error).message);
         }
     }
 
@@ -373,70 +573,146 @@ export class CastManager extends EventEmitter {
     private parseHeaders(response: string): Record<string, string> {
         const lines = response.split('\r\n');
         const headers: Record<string, string> = {};
+
         for (let i = 1; i < lines.length; i++) {
-            const [key, value] = lines[i].split(': ');
-            if (key && value) headers[key.toUpperCase()] = value.trim();
+            const colonIndex = lines[i].indexOf(':');
+            if (colonIndex > 0) {
+                const key = lines[i].substring(0, colonIndex).trim().toUpperCase();
+                const value = lines[i].substring(colonIndex + 1).trim();
+                if (key && value) {
+                    headers[key] = value;
+                }
+            }
         }
+
         return headers;
     }
 
     /**
-     * Extracts services from parsed XML.
+     * Extracts services from parsed XML with better error handling.
      * @param parsed - The parsed XML object.
      * @returns A record of service types and URLs.
      */
     private extractServices(parsed: any): Record<string, string> {
         const services: Record<string, string> = {};
-        const serviceList = parsed.root.device?.serviceList?.service || [];
-        serviceList.forEach((service: any) => {
-            const type = service.serviceType;
-            const controlUrl = service.controlURL;
-            if (type && controlUrl && (type.includes('AVTransport') || type.includes('RenderingControl'))) {
-                services[type] = controlUrl;
-            }
-        });
+
+        try {
+            const serviceList = parsed.root?.device?.serviceList?.service;
+            if (!serviceList) return services;
+
+            const servicesArray = Array.isArray(serviceList) ? serviceList : [serviceList];
+
+            servicesArray.forEach((service: any) => {
+                if (service?.serviceType && service?.controlURL) {
+                    const type = service.serviceType;
+                    if (type.includes('AVTransport') || type.includes('RenderingControl')) {
+                        services[type] = service.controlURL;
+                    }
+                }
+            });
+        } catch (err) {
+            console.warn('Error extracting services:', err);
+        }
+
         return services;
     }
 
+    /**
+     * Extracts device capabilities from device info.
+     * @param deviceInfo - The device info object.
+     * @returns An array of capabilities.
+     */
+    private extractCapabilities(deviceInfo: any): string[] {
+        const capabilities: string[] = [];
+
+        try {
+            // Extract capabilities based on device type and services
+            if (deviceInfo.deviceType?.includes('MediaRenderer')) {
+                capabilities.push('MediaRenderer');
+            }
+
+            // Add more capability detection logic as needed
+
+        } catch (err) {
+            console.warn('Error extracting capabilities:', err);
+        }
+
+        return capabilities;
+    }
 
     /**
-     * Performs a DLNA SOAP action.
+     * Performs a DLNA SOAP action with caching and retry logic.
      * @param serviceType - The service type.
      * @param action - The action to perform.
      * @param body - The SOAP body.
+     * @param useCache - Whether to use caching for this request.
      */
-    private async dlnaSoapAction(serviceType: string, action: string, body: string): Promise<any> {
+    private async dlnaSoapAction(serviceType: string, action: string, body: string, useCache = false): Promise<any> {
+        const cacheKey = `${serviceType}:${action}:${body}`;
+
+        // Check cache for certain actions
+        if (useCache && this.soapCache.has(cacheKey)) {
+            const cached = this.soapCache.get(cacheKey)!;
+            if (Date.now() - cached.timestamp < CACHE_TTL) {
+                return cached.data;
+            }
+        }
+
         const device = this.currentDevice!;
-        // Fix potential double slashes in service URL
         const baseUrl = device.location.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
         const servicePath = device.services![serviceType].replace(/^\/+/, '');
         const serviceUrl = `${baseUrl}/${servicePath}`;
-        try {
-            const response = await fetch(serviceUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/xml; charset="utf-8"',
-                    'SOAPACTION': `"${serviceType}#${action}"`,
-                },
-                body: this.wrapSoapBody(serviceType, action, body),
-            });
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('SOAP error body:', errorText);
-                this.emit('error', this.i18n.t('error.dlnaSoap', {message: `HTTP ${response.status}: ${errorText}`}));
-                throw new Error(`HTTP ${response.status}: ${errorText}`);
+
+        let lastError: Error | null = null;
+
+        // Retry logic
+        for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+                const response = await fetch(serviceUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/xml; charset="utf-8"',
+                        'SOAPACTION': `"${serviceType}#${action}"`,
+                    },
+                    body: this.wrapSoapBody(serviceType, action, body),
+                    signal: controller.signal,
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
+                const xml = await response.text();
+                const parsed = this.xmlParser.parse(xml);
+
+                if (!parsed?.['s:Envelope']?.['s:Body']) {
+                    throw new Error('Invalid SOAP response structure');
+                }
+
+                const result = parsed['s:Envelope']['s:Body'];
+
+                // Cache if requested
+                if (useCache) {
+                    this.soapCache.set(cacheKey, {data: result, timestamp: Date.now()});
+                }
+
+                return result;
+
+            } catch (err) {
+                lastError = err as Error;
+                if (attempt < MAX_RETRY_ATTEMPTS - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                }
             }
-            const xml = await response.text();
-            const parsed = this.xmlParser.parse(xml);
-            if (!parsed || !parsed["s:Envelope"]?.["s:Body"]) {
-                console.error('Invalid SOAP response structure');
-                throw new Error("Invalid SOAP response structure");
-            }
-            return parsed['s:Envelope']['s:Body'];
-        } catch (err) {
-            console.error(`SOAP action ${action} failed:`, (err as Error).message);
-            throw err;
         }
+
+        throw lastError;
     }
 
     /**
@@ -501,7 +777,7 @@ ${body}
      * Mutes or unmutes a DLNA device.
      * @param muted - True to mute, false to unmute.
      */
-    async dlnaSetMute(muted: boolean): Promise<void> {
+    private async dlnaSetMute(muted: boolean): Promise<void> {
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'SetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>${muted ? 1 : 0}</DesiredMute>`);
     }
 
@@ -510,34 +786,40 @@ ${body}
      * @returns A promise resolving to the playback state.
      */
     private async dlnaGetStatus(): Promise<PlaybackState> {
-        const posInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetPositionInfo', `<InstanceID>0</InstanceID>`);
-        if (!posInfo) {
-            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-        }
-        const transInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetTransportInfo', `<InstanceID>0</InstanceID>`);
-        if (!transInfo) {
-            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-        }
-        const volInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetVolume', `<InstanceID>0</InstanceID><Channel>Master</Channel>`);
-        if (!volInfo) {
-            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-        }
-        const muteInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel>`);
-        if (!muteInfo) {
-            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-        }
-        const mediaInfo = await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`);
-        if (!mediaInfo) {
-            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-        }
+        try {
+            // Don't cache position info - we need real-time data
+            const [posInfo, transInfo, volInfo, muteInfo, mediaInfo] = await Promise.all([
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetPositionInfo', `<InstanceID>0</InstanceID>`, false),
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetTransportInfo', `<InstanceID>0</InstanceID>`, false),
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetVolume', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, true),
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, true),
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`, true)
+            ]);
 
-        const position = this.timeToSeconds(posInfo['u:GetPositionInfoResponse'].RelTime || '00:00:00');
-        const duration = this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse'].MediaDuration || '00:00:00');
-        const isPlaying = transInfo['u:GetTransportInfoResponse'].CurrentTransportState === 'PLAYING';
-        const volume = parseInt(volInfo['u:GetVolumeResponse'].CurrentVolume, 10) / 100;
-        const muted = muteInfo['u:GetMuteResponse'].CurrentMute === '1';
+            const position = this.timeToSeconds(posInfo['u:GetPositionInfoResponse']?.RelTime || '00:00:00');
+            const duration = this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse']?.MediaDuration || '00:00:00');
+            const isPlaying = transInfo['u:GetTransportInfoResponse']?.CurrentTransportState === 'PLAYING';
+            const volume = parseInt(volInfo['u:GetVolumeResponse']?.CurrentVolume || '50', 10) / 100;
 
-        return {position, duration, isPlaying, volume, muted};
+            // Handle mute state - some devices don't support GetMute, others report incorrectly
+            let muted = false;
+            try {
+                muted = muteInfo['u:GetMuteResponse']?.CurrentMute === '1';
+            } catch {
+                // If GetMute fails, consider volume 0 as muted
+                muted = volume === 0;
+            }
+
+            // Some devices report mute status incorrectly, use volume as fallback
+            if (!muted && volume === 0) {
+                muted = true;
+            }
+
+            return {position, duration, isPlaying, volume, muted};
+        } catch (err) {
+            console.warn('Error getting DLNA status:', err);
+            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
+        }
     }
 
     /**
@@ -548,7 +830,7 @@ ${body}
     private secondsToTime(seconds: number): string {
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
-        const s = seconds % 60;
+        const s = Math.floor(seconds % 60);
         return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
@@ -558,7 +840,12 @@ ${body}
      * @returns The time in seconds.
      */
     private timeToSeconds(time: string): number {
-        const [h, m, s] = time.split(':').map(Number);
+        if (!time || time === 'NOT_IMPLEMENTED') return 0;
+
+        const parts = time.split(':');
+        if (parts.length !== 3) return 0;
+
+        const [h, m, s] = parts.map(part => parseInt(part, 10) || 0);
         return h * 3600 + m * 60 + s;
     }
 
@@ -566,15 +853,110 @@ ${body}
      * Starts polling for playback status updates.
      */
     private startPolling(): void {
-        if (this.pollingInterval) clearInterval(this.pollingInterval);
-        this.pollingInterval = setInterval(async () => {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
+
+        const poll = async () => {
             try {
+                if (!await this.checkNetworkAndDevice()) {
+                    console.log('Network/device check failed, disconnecting');
+                    this.disconnect();
+                    return;
+                }
+
                 const status = await this.getStatus();
                 this.emit('stateChanged', status);
                 this.emit('progressChanged', status.position);
-            } catch {
+
+                console.log(`Poll update - Position: ${Math.floor(status.position)}s/${Math.floor(status.duration)}s, Playing: ${status.isPlaying}`);
+
+            } catch (err) {
+                console.warn('Polling error:', err);
             }
-        }, 1000);
+
+            // Always schedule next poll with consistent interval
+            this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
+        };
+
+        // Start first poll immediately
+        console.log(`Starting polling every ${CastConfig.DEFAULT_POLL_INTERVAL}ms`);
+        poll();
+    }
+
+    /**
+     * Checks network connectivity and device reachability.
+     * @returns True if network and device are accessible.
+     */
+    private async checkNetworkAndDevice(): Promise<boolean> {
+        try {
+            const netInfo = await NetInfo.fetch();
+            if (!netInfo.isConnected) {
+                this.emit('error', this.i18n.t('error.noNetwork'));
+                return false;
+            }
+
+            if (this.currentDevice) {
+                return await this.checkDeviceReachability(this.currentDevice);
+            }
+
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Checks if a device is reachable.
+     * @param device - The device to check.
+     * @returns True if device is reachable.
+     */
+    private async checkDeviceReachability(device: Device): Promise<boolean> {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CastConfig.CONNECTIVITY_CHECK_TIMEOUT);
+
+            const response = await fetch(device.location, {
+                method: 'HEAD',
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+            return response.ok;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Cleans up expired cache entries.
+     */
+    private cleanupCache(): void {
+        const now = Date.now();
+        for (const [key, entry] of this.soapCache.entries()) {
+            if (now - entry.timestamp > CACHE_TTL * 2) { // Keep cache 2x longer than TTL for cleanup
+                this.soapCache.delete(key);
+            }
+        }
+    }
+
+    /**
+     * Cleans up event listeners.
+     */
+    private cleanupListeners(): void {
+        if (this.castDeviceListener) {
+            this.castDeviceListener.remove();
+            this.castDeviceListener = null;
+        }
+        if (this.sessionListener) {
+            this.sessionListener.remove();
+            this.sessionListener = null;
+        }
+        if (this.mediaListener) {
+            this.mediaListener.remove();
+            this.mediaListener = null;
+        }
     }
 
     /**
@@ -583,9 +965,15 @@ ${body}
      * @returns DIDL XML string
      */
     private buildDIDLMetadata(mediaInfo: MediaInfo): string {
+        // Auto-detect content type if not provided
+        if (!mediaInfo.contentType) {
+            mediaInfo.contentType = CastUtils.getMimeTypeFromUrl(mediaInfo.contentUrl);
+        }
+
         let upnpClass = 'object.item';
-        let protocolInfo = 'http-get:*:*:'; // Fallback
-        let mimeType = mediaInfo.contentType || '*';
+        let protocolInfo = 'http-get:*:*:*'; // Fallback
+        let mimeType = mediaInfo.contentType || '*/*';
+
         if (mimeType.includes('image')) {
             upnpClass = 'object.item.imageItem.photo';
             protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=${mimeType.includes('jpeg') ? 'JPEG_SM' : 'PNG_LRG'};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000`;
@@ -593,21 +981,151 @@ ${body}
             upnpClass = 'object.item.videoItem';
             // Use specific DLNA profile for MP4 (H.264/AAC is common)
             protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MPEG4_P2_MP4_ASP_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
+
             // Add duration if available
             if (mediaInfo.streamDuration) {
                 const durationSeconds = Math.floor(mediaInfo.streamDuration / 1000);
-                const h = Math.floor(durationSeconds / 3600);
-                const m = Math.floor((durationSeconds % 3600) / 60);
-                const s = durationSeconds % 60;
-                const durationStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                const durationStr = this.secondsToTime(durationSeconds);
                 protocolInfo += `;DLNA.ORG_FLAGS=01500000000000000000000000000000`; // Streaming flags
-                return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${Date.now()}" parentID="0" restricted="true"><dc:title>${mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media'}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}" duration="${durationStr}">${mediaInfo.contentUrl}</res></item></DIDL-Lite>`;
+
+                const title = this.escapeXml(mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media');
+                const contentUrl = this.escapeXml(mediaInfo.contentUrl);
+
+                return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${CastUtils.generateUniqueId()}" parentID="0" restricted="true"><dc:title>${title}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}" duration="${durationStr}">${contentUrl}</res></item></DIDL-Lite>`;
             }
+        } else if (mimeType.includes('audio')) {
+            upnpClass = 'object.item.audioItem.musicTrack';
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000`;
         }
 
         // Use metadata.title if available, fallback to filename from contentUrl
-        const title = mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media';
+        const title = this.escapeXml(mediaInfo.metadata?.title || mediaInfo.contentUrl.split('/').pop() || 'Media');
+        const contentUrl = this.escapeXml(mediaInfo.contentUrl);
 
-        return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${Date.now()}" parentID="0" restricted="true"><dc:title>${title}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}">${mediaInfo.contentUrl}</res></item></DIDL-Lite>`;
+        return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="media-${CastUtils.generateUniqueId()}" parentID="0" restricted="true"><dc:title>${title}</dc:title><upnp:class>${upnpClass}</upnp:class><res protocolInfo="${protocolInfo}">${contentUrl}</res></item></DIDL-Lite>`;
+    }
+
+    /**
+     * Escapes XML characters in strings.
+     * @param str - The string to escape.
+     * @returns The escaped string.
+     */
+    private escapeXml(str: string): string {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    /**
+     * Forces an immediate status update (used after play/pause/seek commands)
+     */
+    private async forceStatusUpdate(): Promise<void> {
+        try {
+            // Clear cache to ensure fresh data
+            this.soapCache.clear();
+
+            // Wait a bit longer for the device to process the command
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            const status = await this.getStatus();
+            this.emit('stateChanged', status);
+            this.emit('progressChanged', status.position);
+
+            console.log('Force status update:', status);
+        } catch (err) {
+            console.warn('Force status update failed:', err);
+            // Don't emit error, regular polling will handle it
+        }
+    }
+
+    /**
+     * Extracts and validates device icon URL from device description.
+     * @param parsed - The parsed XML object.
+     * @param baseLocation - The device base location for relative URLs.
+     * @returns Promise resolving to icon URL or undefined.
+     */
+    private async extractDeviceIcon(parsed: any, baseLocation: string): Promise<string | undefined> {
+        try {
+            const iconList = parsed.root?.device?.iconList?.icon;
+            if (!iconList) return undefined;
+
+            const icons = Array.isArray(iconList) ? iconList : [iconList];
+
+            // Sort icons by preference: PNG first, then by size (largest first)
+            const sortedIcons = icons.sort((a, b) => {
+                // Prefer PNG
+                if (a.mimetype === 'image/png' && b.mimetype !== 'image/png') return -1;
+                if (b.mimetype === 'image/png' && a.mimetype !== 'image/png') return 1;
+
+                // Then prefer larger size
+                const aSize = (a.width || 0) * (a.height || 0);
+                const bSize = (b.width || 0) * (b.height || 0);
+                return bSize - aSize;
+            });
+
+            // Test each icon URL until we find one that works
+            for (const icon of sortedIcons) {
+                if (!icon.url) continue;
+
+                const iconUrl = this.buildIconUrl(icon.url, baseLocation);
+                const isValid = await this.validateIconUrl(iconUrl);
+
+                if (isValid) {
+                    return iconUrl;
+                }
+            }
+
+            return undefined;
+        } catch (err) {
+            console.warn('Error extracting device icon:', err);
+            return undefined;
+        }
+    }
+
+    /**
+     * Builds complete icon URL from relative or absolute path.
+     * @param iconPath - The icon path from device description.
+     * @param baseLocation - The device base location.
+     * @returns Complete icon URL.
+     */
+    private buildIconUrl(iconPath: string, baseLocation: string): string {
+        if (iconPath.startsWith('http')) {
+            return iconPath;
+        } else {
+            const baseUrl = baseLocation.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
+            return `${baseUrl}${iconPath.startsWith('/') ? '' : '/'}${iconPath}`;
+        }
+    }
+
+    /**
+     * Validates if an icon URL is accessible.
+     * @param iconUrl - The icon URL to validate.
+     * @returns Promise resolving to boolean indicating if URL is valid.
+     */
+    private async validateIconUrl(iconUrl: string): Promise<boolean> {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+
+            const response = await fetch(iconUrl, {
+                method: 'HEAD',
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                return false;
+            }
+
+            const contentType = response.headers.get('content-type');
+            return contentType ? contentType.startsWith('image/') : false;
+
+        } catch {
+            return false;
+        }
     }
 }

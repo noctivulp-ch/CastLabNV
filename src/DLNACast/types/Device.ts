@@ -1,9 +1,34 @@
-// Defines the common device interface for DLNA
 export interface Device {
-    id: string; // Unique identifier (USN for DLNA)
-    name: string; // Friendly name
-    location: string; // URL to device description
-    ip: string; // IP address
-    port: number; // Port
-    services?: Record<string, string>; // Service URLs for DLNA
+    id: string;
+    name: string;
+    location: string;
+    ip: string;
+    port: number;
+    services: Record<string, string>;
+    manufacturer?: string;
+    modelName?: string;
+    capabilities?: string[];
+    iconUrl?: string; // Single icon URL for display
+}
+
+export interface DeviceCapabilities {
+    canPlay: boolean;
+    canPause: boolean;
+    canSeek: boolean;
+    canSetVolume: boolean;
+    canMute: boolean;
+    supportedFormats: string[];
+}
+
+export enum DeviceConnectionState {
+    DISCONNECTED = 'disconnected',
+    CONNECTING = 'connecting',
+    CONNECTED = 'connected',
+    ERROR = 'error'
+}
+
+export enum DeviceType {
+    MEDIA_RENDERER = 'MediaRenderer',
+    MEDIA_SERVER = 'MediaServer',
+    UNKNOWN = 'Unknown'
 }
