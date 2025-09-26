@@ -267,7 +267,6 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const formatTime = useCallback((seconds: number): string => {
         return CastUtils.formatDuration(seconds);
     }, []);
-
     // Cleanup timeout on unmount
     useEffect(() => {
         return () => {
@@ -380,14 +379,13 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                     </View>
                                 </>
                             )}
-
                             {/* Volume Controls and Status - Always shown */}
                             {playbackState && (
                                 <View style={styles.statusContainer}>
                                     {!isImageMedia() && (
                                         <View style={styles.volumeSection}>
                                             <IconButton
-                                                icon={playbackState.muted || (playbackState.volume || 0) === 0 ? "volume-off" : "volume-high"}
+                                                icon={playbackState.muted || (playbackState.volume || 0) == 0 ? "volume-off" : "volume-high"}
                                                 size={20}
                                                 onPress={handleMuteToggle}
                                                 disabled={isLoading}

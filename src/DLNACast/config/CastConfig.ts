@@ -20,7 +20,7 @@ export const CastConfig = {
     // Request timeouts
     REQUEST_TIMEOUT: 10000, // 10 seconds
     DESCRIPTION_TIMEOUT: 5000, // 5 seconds
-    CONNECTIVITY_CHECK_TIMEOUT: 3000, // 3 seconds
+    CONNECTIVITY_CHECK_TIMEOUT: 10000, // 10 seconds
 
     // Retry settings
     MAX_RETRY_ATTEMPTS: 3,

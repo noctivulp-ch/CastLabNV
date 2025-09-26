@@ -387,39 +387,6 @@ export class CastManager extends EventEmitter {
         }
     }
 
-    /**
-     * Sets the volume level.
-     * @param volume - The volume level (0 to 1).
-     */
-    async setVolume(volume: number): Promise<void> {
-        if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
-            return;
-        }
-
-        try {
-            await this.dlnaSetVolume(Math.round(volume * 100));
-        } catch (err) {
-            this.emit('error', this.i18n.t('error.volume', {message: (err as Error).message}));
-        }
-    }
-
-    /**
-     * Mutes or unmutes the device.
-     * @param muted - True to mute, false to unmute.
-     */
-    async mute(muted: boolean): Promise<void> {
-        if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
-            return;
-        }
-
-        try {
-            await this.dlnaSetMute(muted);
-        } catch (err) {
-            this.emit('error', this.i18n.t('error.mute', {message: (err as Error).message}));
-        }
-    }
 
     /**
      * Retrieves the current playback status.
@@ -468,6 +435,44 @@ export class CastManager extends EventEmitter {
         this.devices.clear();
         this.removeAllListeners();
     }
+
+    /**
+     * Mutes or unmutes the device.
+     * @param muted - True to mute, false to unmute.
+     */
+    async mute(muted: boolean): Promise<void> {
+        if (!this.currentDevice) {
+            this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+        this.dlnaSetMute(muted).then(() => {
+            // Trigger a status update to sync the UI
+            setTimeout(() => this.forceStatusUpdate(), 500);
+        }).catch((err) => {
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.mute', {message: err.message}));
+        });
+    }
+
+    /**
+     * Sets the volume level.
+     * @param volume - The volume level (0 to 1).
+     */
+    async setVolume(volume: number): Promise<void> {
+        if (!this.currentDevice) {
+            this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+        await this.dlnaSetVolume(Math.round(volume * 100)).then(() => {
+            // Trigger a status update to sync the UI
+            setTimeout(() => this.forceStatusUpdate(), 500);
+        }).catch((err) => {
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.mute', {message: err.message}));
+        });
+
+    }
+
 
     /**
      * Non-blocking pause method - returns immediately, command executes in background
@@ -877,11 +882,11 @@ ${body}
                 this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, true),
                 this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`, true)
             ]);
-
             const position = this.timeToSeconds(posInfo['u:GetPositionInfoResponse']?.RelTime || '00:00:00');
             const duration = this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse']?.MediaDuration || '00:00:00');
             const isPlaying = transInfo['u:GetTransportInfoResponse']?.CurrentTransportState === 'PLAYING';
             const volume = parseInt(volInfo['u:GetVolumeResponse']?.CurrentVolume || '50', 10) / 100;
+
 
             // Handle mute state - some devices don't support GetMute, others report incorrectly
             let muted = false;
@@ -994,14 +999,13 @@ ${body}
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CastConfig.CONNECTIVITY_CHECK_TIMEOUT);
-
             const response = await fetch(device.location, {
                 method: 'HEAD',
                 signal: controller.signal,
             });
 
             clearTimeout(timeoutId);
-            return response.ok;
+            return response.status <= 400;
         } catch {
             return false;
         }
