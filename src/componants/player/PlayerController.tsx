@@ -53,12 +53,17 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     // Listen for media cleared event to reset UI
     useEffect(() => {
         const handleMediaCleared = () => {
+            console.log('Media cleared - resetting player UI');
             setAsset(null);
             setUserSeekValue(null);
             setProgress(0);
+            setPlayIcon("play");
+            // Reset volume changing state
+            setIsVolumeChanging(false);
         };
 
         const handleCastingStopped = () => {
+            console.log('Casting stopped - updating play state');
             setPlayIcon("play");
         };
 

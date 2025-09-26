@@ -191,19 +191,30 @@ export class CastManager extends EventEmitter {
             return;
         }
 
+        try {
+            // Send stop command to device
+            await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`);
 
-        // Send stop command in background with proper error handling
-        this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`)
-            .then(() => {
-                // Clear current media info but keep device connected
-                this.currentMediaUri = null;
-                this.currentMediaInfo = null;
-                // Trigger a status update to sync the UI
-                setTimeout(() => this.forceStatusUpdate(), 500);
-            }).catch((err) => {
-            // Emit error but don't block the UI
-            this.emit('error', this.i18n.t('error.pause', {message: err.message}));
-        });
+            // Clear current media info immediately
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+
+            // Emit events to notify UI
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+
+            // Force a status update to sync the UI
+            setTimeout(() => this.forceStatusUpdate(), 500);
+
+        } catch (err) {
+            // Even if DLNA stop fails, clear the media info to reset UI
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+
+            this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
+        }
     }
 
     /**
@@ -907,7 +918,7 @@ ${body}
             const position = this.timeToSeconds(posInfo['u:GetPositionInfoResponse']?.RelTime || '00:00:00');
             const duration = this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse']?.MediaDuration || '00:00:00');
             const isPlaying = transInfo['u:GetTransportInfoResponse']?.CurrentTransportState === 'PLAYING';
-            
+
             const rawVolume = volInfo['u:GetVolumeResponse']?.CurrentVolume;
             const volume = (rawVolume !== undefined && rawVolume !== null) ? parseInt(rawVolume, 10) / 100 : 0.5;
 

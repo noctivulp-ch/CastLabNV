@@ -2,6 +2,8 @@ import React, {createContext, Dispatch, ReactNode, useContext, useEffect, useRed
 import {CastManager, PlaybackState} from "../DLNACast/CastManager";
 import {Device} from "../DLNACast/types/Device";
 import {CastConfig} from "../DLNACast/config/CastConfig";
+import {useDispatch} from 'react-redux';
+import {setCurrentAsset} from '../store/slice/castSlice';
 
 const castManager = new CastManager();
 
@@ -176,6 +178,7 @@ const CastManagerContext = createContext<CastManagerContextProps>({} as CastMana
 
 const CastManagerContextProvider = ({children}: ContextProviderProps) => {
     const [state, dispatch] = useReducer(castReducer, initialState);
+    const reduxDispatch = useDispatch(); // Add Redux dispatch
 
     // Event handlers
     const onDisconnected = () => {
@@ -225,6 +228,10 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         dispatch({type: 'CASTING_STARTED'});
     };
 
+    const onCastingStopped = (): void => {
+        dispatch({type: 'CASTING_STOPPED'});
+    };
+
     const onDeviceCapabilityUpdated = (device: Device) => {
         // Update device in the list
         dispatch({type: 'DEVICE_ADDED', device});
@@ -233,6 +240,12 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         if (state.connectedDevice?.id === device.id) {
             dispatch({type: 'CONNECTED', device});
         }
+    };
+
+    // Handle media cleared event to update Redux state
+    const onMediaCleared = () => {
+        reduxDispatch(setCurrentAsset(null));
+        dispatch({type: 'CASTING_STOPPED'});
     };
 
     // Helper functions
@@ -258,7 +271,9 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
             'searchStarted': onSearchStarted,
             'searchStopped': onSearchStopped,
             'castingStarted': onCastingStarted,
+            'castingStopped': onCastingStopped,
             'deviceCapabilityUpdated': onDeviceCapabilityUpdated,
+            'mediaCleared': onMediaCleared,
         };
 
         // Add all listeners
@@ -272,7 +287,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
                 castManager.removeListener(event, handler);
             });
         };
-    }, []);
+    }, [reduxDispatch]);
 
     // Cleanup cast manager on unmount
     useEffect(() => {
