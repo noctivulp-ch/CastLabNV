@@ -221,12 +221,17 @@ export class CastManager extends EventEmitter {
         }
 
         try {
+            // Stop polling immediately
+            this.stopPolling();
             // First stop any current playback
             await this.stop();
-
-            // Then disconnect completely
+            // Clear state immediately
             this.currentDevice = null;
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            // Emit disconnected event
             this.emit('disconnected');
+            this.emit('mediaCleared');
         } catch (err) {
             this.emit('error', this.i18n.t('error.disconnect', {message: (err as Error).message}));
         }
@@ -981,6 +986,17 @@ ${body}
 
         const [h, m, s] = parts.map(part => parseInt(part, 10) || 0);
         return h * 3600 + m * 60 + s;
+    }
+
+
+    /**
+     * Stops the polling interval if it's running.
+     */
+    private stopPolling(): void {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
     }
 
     /**
