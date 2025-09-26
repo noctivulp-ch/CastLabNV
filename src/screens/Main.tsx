@@ -35,20 +35,22 @@ import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
 
-//Declare roots for navigation
+// Navigation parameter types
 export type RootStackParamList = {
-    Albums: any;
-    Album: { album: Album, videoOnly: boolean };
+    Albums: { playerHeight?: number };
+    Album: { album: Album, videoOnly: boolean, playerHeight?: number };
     PictureAlbums: any;
     VideoAlbums: any;
 }
-const isIOS = Platform.OS === 'ios';
 
+const isIOS = Platform.OS === 'ios';
 
 const Main: React.FC = () => {
     const {setTheme, theme, statusBarTheme, type: themeType} = useContext(ThemeContext);
     const Stack = createNativeStackNavigator<RootStackParamList>();
     const i18n = initTranslate();
+
+    // UI state management
     const [alertVisible, setAlertVisible] = useState<boolean>(false);
     const [toastVisible, setToastVisible] = useState<boolean>(false);
     const [playerVisible, setPlayerVisible] = useState<boolean>(false);
@@ -57,23 +59,34 @@ const Main: React.FC = () => {
     const [toastText1, setToastText1] = useState<string>("");
     const [toastText2, setToastText2] = useState<string>("");
     const [castDialogVisible, setCastDialogVisible] = useState(false);
+    const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
+    const [themeDialogVisible, setThemeDialogVisible] = useState(false);
+
+    // Player height management - tracks the actual height of the PlayerController
+    const [playerHeight, setPlayerHeight] = useState<number>(0);
+
+    // Redux and database setup
     const cast = useSelector((state: IRootState) => state.cast);
     const expo = SQLite.openDatabaseSync('db.db');
     const db = drizzle(expo);
     const {success} = useMigrations(db, migrations);
-    const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
-    const [themeDialogVisible, setThemeDialogVisible] = useState(false);
+
+    // Cast management
     const {castManager, devices, error, connectedDevice, isConnected} = useCastManager();
     const prevConnectedDevice = useRef(connectedDevice);
+
+    // Server management
     const serverRef = useRef<StaticServer | null>(null);
-    // Initialize background notifications and get control functions
+
+    // Initialize background notifications
     useBackgroundNotification();
 
+    // Load theme preference from storage
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
         setTheme(value ? value : "auto");
     })
 
-
+    // Handle cast manager errors
     useEffect(() => {
         if (error) {
             setToastText1(error);
@@ -83,21 +96,24 @@ const Main: React.FC = () => {
         }
     }, [error]);
 
+    // Update player visibility based on connected device
     useEffect(() => {
         setPlayerVisible(connectedDevice != null);
     }, [connectedDevice]);
 
-    //Change when pressing media in AlbumScreen
+    // Handle media casting when asset changes
     useEffect(() => {
         (async () => {
             if (cast?.currentAsset) {
                 let uri;
                 const asset: Asset = cast.currentAsset;
                 const album_id = asset?.albumId?.replace("\"", "").replace("'", "").replace("-", "");
-                //We include album ID if a file as the same name in a different album
+
+                // Include album ID if a file has the same name in a different album
                 const serverFileName = encodeURIComponent((album_id && album_id.length > 0 ? album_id + "_" : "") + asset.filename.replace("\"", "").replace("'", ""));
                 const fileDir = resolveAssetsPath("webroot");
-                //We check the file was not previously copied to fileDir
+
+                // Check if the file was not previously copied to fileDir
                 if (!await exists(fileDir + "/" + serverFileName)) {
                     try {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
@@ -105,31 +121,45 @@ const Main: React.FC = () => {
                         console.error(error);
                     }
                 }
-                //Get the internal network ip address of the device
+
+                // Get the internal network IP address of the device
                 const ip: string = await Network.getIpAddressAsync();
                 uri = `http://${ip}:${SERVER_PORT}/${serverFileName}`;
+
                 if (uri) {
-                    //Start casting the new media
-                    await castManager.castMedia(
-                        {
-                            contentUrl: uri,
-                            metadata: {
-                                title: asset.filename,
-                                images: [{url: uri, width: asset.width, height: asset.height}],
-                            },
-                            streamDuration: asset.duration,
-                        });
+                    // Start casting the new media
+                    await castManager.castMedia({
+                        contentUrl: uri,
+                        metadata: {
+                            title: asset.filename,
+                            images: [{url: uri, width: asset.width, height: asset.height}],
+                        },
+                        streamDuration: asset.duration,
+                    });
                 }
             }
         })();
     }, [cast.currentAsset]);
 
+    /**
+     * Callback to handle player height changes from PlayerController
+     * This is called whenever the PlayerController's height changes
+     */
+    const handlePlayerHeightChange = useCallback((height: number) => {
+        setPlayerHeight(height);
+    }, []);
 
+    /**
+     * Handle device selection from cast popup
+     */
     const devicePressedHandler = useCallback(async (event: GestureResponderEvent, device: Device) => {
         await castManager.connect(device);
         setCastDialogVisible(false);
     }, [castManager]);
 
+    /**
+     * Handle cast button press - connect/disconnect or show device list
+     */
     const buttonCastPressed = async () => {
         if (castManager.isConnected()) {
             await castManager.disconnect();
@@ -142,12 +172,12 @@ const Main: React.FC = () => {
         }
     };
 
-    /** Delete all files from the server directory */
+    /**
+     * Delete all files from the server directory
+     */
     const deleteFiles = async () => {
-        // Directory for storing server files
         const SERVER_FILE_DIRECTORY = `${FileSystem.documentDirectory}webroot/`;
         try {
-            // Clear directory
             await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, {idempotent: true});
             await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, {intermediates: true});
         } catch (error) {
@@ -155,14 +185,21 @@ const Main: React.FC = () => {
         }
     };
 
+    /**
+     * Show app information dialog
+     */
     const displayAppInfo = () => {
         setAboutDialogVisible(true);
     }
+
+    /**
+     * Show theme picker dialog
+     */
     const displayThemePicker = () => {
         setThemeDialogVisible(true);
     }
 
-
+    // Server management effect - starts/stops server based on device connection
     useEffect(() => {
         let isMounted = true;
 
@@ -185,6 +222,8 @@ const Main: React.FC = () => {
             try {
                 const ip = await Network.getIpAddressAsync();
                 const fileDir = resolveAssetsPath('webroot');
+
+                // DLNA server configuration
                 const extraConfig = `server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
@@ -213,6 +252,7 @@ const Main: React.FC = () => {
                     if (currentServer) {
                         await currentServer.stop();
                     }
+
                     serverRef.current = new StaticServer({
                         fileDir,
                         extraConfig,
@@ -261,13 +301,16 @@ const Main: React.FC = () => {
         };
     }, [connectedDevice]);
 
-
+    // App initialization effect
     useEffect(() => {
         deleteFiles();
-        //Start discovering
-        if (!isIOS) { //iOS will request a permission when starting the app, better is to give this permission when tapping on the cast button
+
+        // Start device discovery (except on iOS where we wait for user action)
+        if (!isIOS) {
             castManager.startSearch();
         }
+
+        // Listen for system theme changes
         const themeListener = Appearance.addChangeListener(scheme => {
             setTheme(scheme.colorScheme === "dark" ? "dark" : "light");
         });
@@ -276,81 +319,118 @@ const Main: React.FC = () => {
             themeListener.remove();
             deleteFiles();
         }
-
     }, [castManager]);
 
     return (
         <PaperProvider theme={theme}>
             <NavigationContainer theme={statusBarTheme}>
-                <Stack.Navigator initialRouteName="Albums" screenOptions={{
-                    headerShown: true,
-                    gestureEnabled: true,
-                    title: i18n.t('albums'),
-                    header: (props) => <CustomAppBar {...props} onButtonCastPressed={buttonCastPressed}
-                                                     castManager={castManager}
-                                                     infoPress={displayAppInfo} themePressed={displayThemePicker}/>,
-                }}>
-                    <Stack.Screen name="Albums" component={AlbumsScreen}
-                                  options={{headerShown: true}}/>
-                    <Stack.Screen name="Album" component={AlbumScreen}
-                                  options={{headerShown: true}}/>
+                <Stack.Navigator
+                    initialRouteName="Albums"
+                    screenOptions={{
+                        headerShown: true,
+                        gestureEnabled: true,
+                        title: i18n.t('albums'),
+                        header: (props) => <CustomAppBar
+                            {...props}
+                            onButtonCastPressed={buttonCastPressed}
+                            castManager={castManager}
+                            infoPress={displayAppInfo}
+                            themePressed={displayThemePicker}
+                        />,
+                    }}
+                >
+                    {/* Albums screen with player height prop */}
+                    <Stack.Screen
+                        name="Albums"
+                        options={{headerShown: true}}
+                    >
+                        {(props) => <AlbumsScreen {...props} playerHeight={playerHeight}/>}
+                    </Stack.Screen>
+
+                    {/* Album screen with player height prop */}
+                    <Stack.Screen
+                        name="Album"
+                        options={{headerShown: true}}
+                    >
+                        {(props) => <AlbumScreen {...props} playerHeight={playerHeight}/>}
+                    </Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
-            <StatusBar style={theme.dark ? "light" : "dark"}/>
-            <CastDevicesPopup devices={devices}
-                              devicePressed={devicePressedHandler}
-                              visible={castDialogVisible}
-                              hide={() => {
-                                  setCastDialogVisible(false)
-                              }}/>
 
-            <Toast type={"info"} text1={toastText1} text2={toastText2} visible={toastVisible}
-                   onToastHide={() => setToastVisible(false)}/>
-            <PlayerController visible={playerVisible} connectedDevice={connectedDevice}/>
+            {/* Status bar configuration */}
+            <StatusBar style={theme.dark ? "light" : "dark"}/>
+
+            {/* Cast device selection popup */}
+            <CastDevicesPopup
+                devices={devices}
+                devicePressed={devicePressedHandler}
+                visible={castDialogVisible}
+                hide={() => setCastDialogVisible(false)}
+            />
+
+            {/* Toast notifications */}
+            <Toast
+                type={"info"}
+                text1={toastText1}
+                text2={toastText2}
+                visible={toastVisible}
+                onToastHide={() => setToastVisible(false)}
+            />
+
+            {/* Player controller with height change callback */}
+            <PlayerController
+                visible={playerVisible}
+                connectedDevice={connectedDevice}
+                onHeightChange={handlePlayerHeightChange}
+            />
+
+            {/* About dialog */}
             <Portal>
-                <Dialog visible={aboutDialogVisible} onDismiss={() => {
-                    setAboutDialogVisible(false)
-                }}>
+                <Dialog visible={aboutDialogVisible} onDismiss={() => setAboutDialogVisible(false)}>
                     <Dialog.Content style={{alignItems: "center"}}>
                         <Text variant="titleLarge">CastLab</Text>
-                        <Text variant="labelLarge" style={{
-                            marginTop: 10
-                        }}>{i18n.t('version', {version: app.expo.version})}</Text>
-                        <Text variant="bodyLarge"
-                              style={{marginTop: 20}}>{i18n.t('source_code')}</Text>
+                        <Text variant="labelLarge" style={{marginTop: 10}}>
+                            {i18n.t('version', {version: app.expo.version})}
+                        </Text>
+                        <Text variant="bodyLarge" style={{marginTop: 20}}>
+                            {i18n.t('source_code')}
+                        </Text>
                         <Text
                             onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab')}
-                            style={{
-                                marginTop: 10,
-                                color: theme.colors.primary
-                            }}>https://codeberg.org/tom79/CastLab</Text>
-                        <Text variant="bodyLarge"
-                              style={{marginTop: 20}}>{i18n.t('report_bugs')}</Text>
+                            style={{marginTop: 10, color: theme.colors.primary}}
+                        >
+                            https://codeberg.org/tom79/CastLab
+                        </Text>
+                        <Text variant="bodyLarge" style={{marginTop: 20}}>
+                            {i18n.t('report_bugs')}
+                        </Text>
                         <Text
                             onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab/issues')}
-                            style={{
-                                marginTop: 10,
-                                color: theme.colors.primary
-                            }}>https://codeberg.org/tom79/CastLab/issues</Text>
-                        <Text variant="bodyLarge"
-                              style={{marginTop: 20}}>{i18n.t('donations')}</Text>
+                            style={{marginTop: 10, color: theme.colors.primary}}
+                        >
+                            https://codeberg.org/tom79/CastLab/issues
+                        </Text>
+                        <Text variant="bodyLarge" style={{marginTop: 20}}>
+                            {i18n.t('donations')}
+                        </Text>
                         <Text
                             onPress={() => Linking.openURL('https://fedilab.app/page/donations/')}
-                            style={{
-                                marginTop: 10,
-                                color: theme.colors.primary
-                            }}>https://fedilab.app/page/donations/</Text>
-
+                            style={{marginTop: 10, color: theme.colors.primary}}
+                        >
+                            https://fedilab.app/page/donations/
+                        </Text>
                     </Dialog.Content>
                     <Dialog.Actions>
-                        <Button onPress={() => setAboutDialogVisible(false)}>{i18n.t('close')}</Button>
+                        <Button onPress={() => setAboutDialogVisible(false)}>
+                            {i18n.t('close')}
+                        </Button>
                     </Dialog.Actions>
                 </Dialog>
             </Portal>
+
+            {/* Theme selection dialog */}
             <Portal>
-                <Dialog visible={themeDialogVisible} onDismiss={() => {
-                    setThemeDialogVisible(false)
-                }}>
+                <Dialog visible={themeDialogVisible} onDismiss={() => setThemeDialogVisible(false)}>
                     <Dialog.Title>{i18n.t('change_theme')}</Dialog.Title>
                     <Dialog.Content>
                         <RadioButton.Group onValueChange={value => setTheme(value)} value={themeType}>
@@ -360,7 +440,9 @@ const Main: React.FC = () => {
                         </RadioButton.Group>
                     </Dialog.Content>
                     <Dialog.Actions>
-                        <Button onPress={() => setThemeDialogVisible(false)}>{i18n.t('close')}</Button>
+                        <Button onPress={() => setThemeDialogVisible(false)}>
+                            {i18n.t('close')}
+                        </Button>
                     </Dialog.Actions>
                 </Dialog>
             </Portal>
