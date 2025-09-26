@@ -30,6 +30,7 @@ import Toast from "../componants/alert/Toast";
 import app from "../../app.json";
 import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
+import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -65,6 +66,8 @@ const Main: React.FC = () => {
     const {castManager, devices, error, connectedDevice, isConnected} = useCastManager();
     const prevConnectedDevice = useRef(connectedDevice);
     const serverRef = useRef<StaticServer | null>(null);
+    // Initialize background notifications and get control functions
+    useBackgroundNotification();
 
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
         setTheme(value ? value : "auto");
@@ -185,7 +188,7 @@ const Main: React.FC = () => {
                 const extraConfig = `server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
-                        "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000",
+                        "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000000000",
                         "Access-Control-Allow-Origin" => "*",
                         "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD",
                         "Accept-Ranges" => "bytes"
@@ -230,8 +233,6 @@ const Main: React.FC = () => {
 
                     await serverRef.current.start();
 
-                    // await mediaServerRef.current.start(ip);
-
                     serverRef.current.addStateListener((newState, details, error) => {
                         if (error) console.error('StaticServer error:', error);
                         console.log('StaticServer state:', details);
@@ -264,7 +265,7 @@ const Main: React.FC = () => {
     useEffect(() => {
         deleteFiles();
         //Start discovering
-        if (!isIOS) { //iOS will request a permission when starting the app, bette is to give this permission when tapping on the cast button
+        if (!isIOS) { //iOS will request a permission when starting the app, better is to give this permission when tapping on the cast button
             castManager.startSearch();
         }
         const themeListener = Appearance.addChangeListener(scheme => {
@@ -276,7 +277,8 @@ const Main: React.FC = () => {
             deleteFiles();
         }
 
-    }, []);
+    }, [castManager]);
+
     return (
         <PaperProvider theme={theme}>
             <NavigationContainer theme={statusBarTheme}>

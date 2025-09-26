@@ -11,7 +11,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.fedilab.castlab",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "This app requires local network access to discover DLNA devices."
+        "NSLocalNetworkUsageDescription": "This app requires local network access to discover DLNA devices.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
       },
       "icon": {
         "dark": "./assets/ios_dark.png",
@@ -88,6 +91,12 @@
       "expo-asset",
       "expo-sqlite"
     ],
+    "notification": {
+      "icon": "./assets/notification.png",
+      "color": "#ffffff",
+      "androidMode": "default",
+      "androidCollapsedTitle": "CastLab"
+    },
     "extra": {
       "eas": {
         "projectId": "461fe6cd-74d4-4b82-a38f-4a1e4ee3b76e"

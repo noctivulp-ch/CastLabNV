@@ -29,6 +29,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const [isLoading, setIsLoading] = useState(false);
     const [userSeekValue, setUserSeekValue] = useState<number | null>(null);
     const [showVolumeControls, setShowVolumeControls] = useState(false);
+    const [previousVolume, setPreviousVolume] = useState<number>(0.5);
 
     // Refs for managing state
     const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -42,6 +43,27 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
         // Reset user seek value when changing media
         setUserSeekValue(null);
     }, [cast.currentAsset]);
+
+    // Listen for media cleared event to reset UI
+    useEffect(() => {
+        const handleMediaCleared = () => {
+            setAsset(null);
+            setUserSeekValue(null);
+            setProgress(0);
+        };
+
+        const handleCastingStopped = () => {
+            setPlayIcon("play");
+        };
+
+        castManager.on('mediaCleared', handleMediaCleared);
+        castManager.on('castingStopped', handleCastingStopped);
+
+        return () => {
+            castManager.off('mediaCleared', handleMediaCleared);
+            castManager.off('castingStopped', handleCastingStopped);
+        };
+    }, [castManager, setProgress]);
 
     // Update play icon based on playback state
     useEffect(() => {
@@ -84,11 +106,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
         CastUtils.debounce(async (value: number) => {
             try {
                 setIsLoading(true);
-                console.log('Executing debounced seek to:', value);
-
                 await castManager.seek(value);
-                console.log('Seek command completed');
-
             } catch (error) {
                 const errorMessage = (error as Error).message;
 
@@ -114,11 +132,8 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const handleSliderComplete = useCallback((value: number) => {
         // Check if seeking is supported
         if (!castManager.canSeek()) {
-            console.log('Seek not supported by this device');
             return;
         }
-
-        console.log('User seeking to:', value);
 
         // Immediately update visual value to avoid "jump"
         setUserSeekValue(value);
@@ -129,7 +144,6 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
         // Clean user value after delay
         setTimeout(() => {
             setUserSeekValue(null);
-            console.log('Cleared user seek value');
         }, 3000);
     }, [debouncedSeek, castManager]);
 
@@ -166,6 +180,22 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     }, [castManager, playbackState?.isPlaying, isLoading]);
 
     /**
+     * Handle stop button - stops casting and clears media
+     */
+    const handleStop = useCallback(async () => {
+        if (isLoading) return;
+
+        try {
+            setIsLoading(true);
+            await castManager.stop();
+        } catch (error) {
+            console.error('Stop failed:', error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [castManager, isLoading]);
+
+    /**
      * Handle volume change
      */
     const handleVolumeChange = useCallback(async (volume: number) => {
@@ -175,6 +205,13 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
             console.error('Volume change failed:', error);
         }
     }, [castManager]);
+
+    // Store previous volume when not muted
+    useEffect(() => {
+        if (playbackState && playbackState.volume > 0 && !playbackState.muted) {
+            setPreviousVolume(playbackState.volume);
+        }
+    }, [playbackState?.volume, playbackState?.muted]);
 
     /**
      * Check if current media is an image
@@ -198,26 +235,31 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
      * Handle mute toggle with fallback to volume control
      */
     const handleMuteToggle = useCallback(async () => {
-        try {
-            // Try native mute first
-            await castManager.mute(!playbackState?.muted);
-        } catch (error) {
-            console.warn('Native mute failed, trying volume fallback:', error);
+        if (!playbackState) return;
 
-            // Fallback: Set volume to 0 or restore previous volume
-            try {
-                if (playbackState?.muted || (playbackState?.volume || 0) === 0) {
-                    // Restore to 50% if muted or at 0
-                    await castManager.setVolume(0.5);
-                } else {
-                    // Set to 0 to "mute"
-                    await castManager.setVolume(0);
-                }
-            } catch (volumeError) {
-                console.error('Volume fallback also failed:', volumeError);
+        const currentVolume = playbackState.volume || 0;
+        const isMuted = playbackState.muted || currentVolume === 0;
+
+        try {
+            if (isMuted) {
+                // Unmuting - restore to previous volume or 50%
+                const targetVolume = previousVolume > 0 ? previousVolume : 0.5;
+                await castManager.setVolume(targetVolume);
+            } else {
+                // Muting - set volume to 0
+                await castManager.setVolume(0);
             }
+
+            // Try native mute as secondary action (some devices support both)
+            try {
+                await castManager.mute(!isMuted);
+            } catch (muteError) {
+            }
+
+        } catch (error) {
+            console.error('Mute toggle failed completely:', error);
         }
-    }, [castManager, playbackState?.muted, playbackState?.volume]);
+    }, [castManager, playbackState, previousVolume]);
 
     /**
      * Format time in MM:SS or HH:MM:SS format
@@ -256,6 +298,15 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                     resizeMode="cover"
                                 />
                             )}
+                            {/* Stop button in the title area */}
+                            <IconButton
+                                icon="stop"
+                                size={24}
+                                onPress={handleStop}
+                                disabled={isLoading}
+                                style={styles.stopButton}
+                                iconColor={theme.colors.error}
+                            />
                         </View>
                     )}
 
@@ -437,6 +488,11 @@ const useStyles = (theme: any) => StyleSheet.create({
         width: 60,
         height: 60,
         borderRadius: 8,
+        marginRight: 8,
+    },
+    stopButton: {
+        backgroundColor: theme.colors.errorContainer,
+        margin: 0,
     },
     controlsContainer: {
         paddingHorizontal: 16,

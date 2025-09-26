@@ -39,6 +39,7 @@ export class CastManager extends EventEmitter {
     private timeout: NodeJS.Timeout | null = null; // Search timeout
     private currentMediaUri: string | null = null;
     private currentDevice: Device | null = null; // Currently connected device
+    private currentMediaInfo: MediaInfo | null = null;
     private pollingInterval: NodeJS.Timeout | null = null; // Polling
     private castDeviceListener: any = null; // Cast device listener subscription
     private sessionListener: any = null; // Session listener subscription
@@ -70,6 +71,22 @@ export class CastManager extends EventEmitter {
      */
     connectedDevice(): Device | null {
         return this.currentDevice;
+    }
+
+    /**
+     * Gets information about the currently playing media.
+     * @returns The current media info or null.
+     */
+    getCurrentMediaInfo(): MediaInfo | null {
+        return this.currentMediaInfo;
+    }
+
+    /**
+     * Gets the title of the currently playing media.
+     * @returns The current media title or null.
+     */
+    getCurrentMediaTitle(): string | null {
+        return this.currentMediaInfo?.metadata?.title || null;
     }
 
     /**
@@ -166,7 +183,31 @@ export class CastManager extends EventEmitter {
     }
 
     /**
-     * Disconnects from the current device.
+     * Stop media playback but keep device connected
+     */
+    async stop(): Promise<void> {
+        if (!this.currentDevice) {
+            this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+
+        // Send stop command in background with proper error handling
+        this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`)
+            .then(() => {
+                // Clear current media info but keep device connected
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                // Trigger a status update to sync the UI
+                setTimeout(() => this.forceStatusUpdate(), 500);
+            }).catch((err) => {
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.pause', {message: err.message}));
+        });
+    }
+
+    /**
+     * Disconnects from the current device completely
      */
     async disconnect(): Promise<void> {
         if (!this.currentDevice) {
@@ -175,16 +216,11 @@ export class CastManager extends EventEmitter {
         }
 
         try {
-            await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`);
+            // First stop any current playback
+            await this.stop();
 
-            if (this.pollingInterval) {
-                clearInterval(this.pollingInterval);
-                this.pollingInterval = null;
-            }
-
+            // Then disconnect completely
             this.currentDevice = null;
-            this.currentMediaUri = null;
-            this.soapCache.clear(); // Clear cache on disconnect
             this.emit('disconnected');
         } catch (err) {
             this.emit('error', this.i18n.t('error.disconnect', {message: (err as Error).message}));
@@ -213,6 +249,7 @@ export class CastManager extends EventEmitter {
             console.warn(`Device may not support media type: ${mediaInfo.contentType}`);
         }
 
+        this.currentMediaInfo = mediaInfo;
         this.currentMediaUri = mediaInfo.contentUrl;
 
         try {
@@ -256,41 +293,6 @@ export class CastManager extends EventEmitter {
         }
     }
 
-    /**
-     * Plays media on a DLNA device.
-     */
-    async play(): Promise<void> {
-        if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
-            return;
-        }
-
-        try {
-            await this.dlnaPlay();
-            // Force immediate status update after play command
-            this.forceStatusUpdate();
-        } catch (err) {
-            this.emit('error', this.i18n.t('error.play', {message: (err as Error).message}));
-        }
-    }
-
-    /**
-     * Pauses the currently playing media.
-     */
-    async pause(): Promise<void> {
-        if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
-            return;
-        }
-
-        try {
-            await this.dlnaPause();
-            // Force immediate status update after pause command
-            this.forceStatusUpdate();
-        } catch (err) {
-            this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
-        }
-    }
 
     /**
      * Seeks to a specific position in the media.
@@ -304,7 +306,6 @@ export class CastManager extends EventEmitter {
 
         // Check if this device is already known to not support seek
         if (this.currentDevice.capabilities?.includes('NoSeek')) {
-            console.log('Device known to not support seek - ignoring request');
             return;
         }
 
@@ -329,16 +330,11 @@ export class CastManager extends EventEmitter {
 
             // Don't seek if already at the target position
             if (Math.abs(currentStatus.position - position) < 3) {
-                console.log('Already near target position, skipping seek');
                 return;
             }
 
-            console.log(`Attempting seek from ${currentStatus.position}s to ${position}s`);
-
             // Try standard DLNA seek
             await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Seek', `<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>${this.secondsToTime(position)}</Target>`);
-
-            console.log('Seek command sent successfully');
 
             // Update UI immediately for responsiveness
             this.emit('progressChanged', position);
@@ -349,9 +345,7 @@ export class CastManager extends EventEmitter {
                     const updatedStatus = await this.dlnaGetStatus();
                     this.emit('stateChanged', updatedStatus);
                     this.emit('progressChanged', updatedStatus.position);
-                    console.log(`Seek result - Target: ${position}s, Actual: ${updatedStatus.position}s`);
                 } catch (err) {
-                    console.warn('Error verifying seek result:', err);
                 }
             }, 1000);
 
@@ -361,8 +355,6 @@ export class CastManager extends EventEmitter {
             // Handle specific DLNA error codes and mark device capabilities
             if (errorMessage.includes('501') || errorMessage.includes('Action Failed') ||
                 errorMessage.includes('701') || errorMessage.includes('714')) {
-
-                console.log('Device does not support DLNA seek - marking as NoSeek');
 
                 // Mark this device as not supporting seek
                 if (this.currentDevice) {
@@ -475,6 +467,170 @@ export class CastManager extends EventEmitter {
         this.soapCache.clear();
         this.devices.clear();
         this.removeAllListeners();
+    }
+
+    /**
+     * Non-blocking pause method - returns immediately, command executes in background
+     */
+    async pause(): Promise<void> {
+        if (!this.currentDevice) {
+            this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+        // Execute pause command in background with proper error handling
+        this.dlnaPause().then(() => {
+            // Trigger a status update to sync the UI
+            setTimeout(() => this.forceStatusUpdate(), 500);
+        }).catch((err) => {
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.pause', {message: err.message}));
+        });
+    }
+
+    /**
+     * Non-blocking play method - returns immediately, command executes in background
+     */
+    async play(): Promise<void> {
+        if (!this.currentDevice) {
+            this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+        // Execute play command in background with proper error handling
+        this.dlnaPlay().then(() => {
+            // Trigger a status update to sync the UI
+            setTimeout(() => this.forceStatusUpdate(), 500);
+        }).catch((err) => {
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.pause', {message: err.message}));
+        });
+    }
+
+    /**
+     * Performs a DLNA SOAP action with aggressive timeout handling
+     * @param serviceType - The service type.
+     * @param action - The action to perform.
+     * @param body - The SOAP body.
+     * @param useCache - Whether to use caching for this request.
+     */
+    private async dlnaSoapAction(serviceType: string, action: string, body: string, useCache = false): Promise<any> {
+        const cacheKey = `${serviceType}:${action}:${body}`;
+
+        // Check cache for certain actions
+        if (useCache && this.soapCache.has(cacheKey)) {
+            const cached = this.soapCache.get(cacheKey)!;
+            if (Date.now() - cached.timestamp < CACHE_TTL) {
+                return cached.data;
+            }
+        }
+
+        const device = this.currentDevice!;
+        const baseUrl = device.location.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
+        const servicePath = device.services![serviceType].replace(/^\/+/, '');
+        const serviceUrl = `${baseUrl}/${servicePath}`;
+
+        // Use a much shorter timeout for play/pause actions
+        const actionTimeout = (action === 'Play' || action === 'Pause') ? 3000 : REQUEST_TIMEOUT;
+
+        let lastError: Error | null = null;
+
+        // Only retry once for play/pause to avoid long delays
+        const maxAttempts = (action === 'Play' || action === 'Pause') ? 1 : MAX_RETRY_ATTEMPTS;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+
+                // Create a promise that will definitely resolve/reject within the timeout
+                const soapRequest = new Promise<any>(async (resolve, reject) => {
+                    let controller: AbortController | null = null;
+                    let timeoutId: NodeJS.Timeout | null = null;
+                    let completed = false;
+
+                    try {
+                        // Set up timeout that will force resolution
+                        timeoutId = setTimeout(() => {
+                            if (!completed) {
+                                completed = true;
+                                if (controller) {
+                                    controller.abort();
+                                }
+                                reject(new Error(`Force timeout after ${actionTimeout}ms`));
+                            }
+                        }, actionTimeout);
+
+                        controller = new AbortController();
+
+                        const response = await fetch(serviceUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'text/xml; charset="utf-8"',
+                                'SOAPACTION': `"${serviceType}#${action}"`,
+                            },
+                            body: this.wrapSoapBody(serviceType, action, body),
+                            signal: controller.signal,
+                        });
+
+                        if (!completed) {
+
+                            if (!response.ok) {
+                                const errorText = await response.text();
+                                throw new Error(`HTTP ${response.status}: ${errorText}`);
+                            }
+
+                            const xml = await response.text();
+
+                            const parsed = this.xmlParser.parse(xml);
+
+                            if (!parsed?.['s:Envelope']?.['s:Body']) {
+                                throw new Error('Invalid SOAP response structure');
+                            }
+
+                            const result = parsed['s:Envelope']['s:Body'];
+
+                            if (!completed) {
+                                completed = true;
+                                if (timeoutId) clearTimeout(timeoutId);
+                                resolve(result);
+                            }
+                        }
+                    } catch (err) {
+                        if (!completed) {
+                            completed = true;
+                            if (timeoutId) clearTimeout(timeoutId);
+                            console.error(`SOAP fetch error for ${action}:`, (err as Error).message);
+                            reject(err);
+                        }
+                    }
+                });
+
+                const result = await soapRequest;
+
+                // Cache if requested
+                if (useCache) {
+                    this.soapCache.set(cacheKey, {data: result, timestamp: Date.now()});
+                }
+
+                return result;
+
+            } catch (err) {
+                lastError = err as Error;
+                console.error(`SOAP attempt ${attempt + 1} failed for ${action}:`, lastError.message);
+
+                // For play/pause, don't retry - fail fast
+                if (action === 'Play' || action === 'Pause') {
+                    break;
+                }
+
+                // Wait before retry for other actions
+                if (attempt < maxAttempts - 1) {
+                    const delay = 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        console.error(`SOAP action ${action} FINAL FAILURE:`, lastError?.message);
+        throw lastError || new Error(`SOAP action ${action} failed`);
     }
 
     /**
@@ -640,80 +796,6 @@ export class CastManager extends EventEmitter {
         return capabilities;
     }
 
-    /**
-     * Performs a DLNA SOAP action with caching and retry logic.
-     * @param serviceType - The service type.
-     * @param action - The action to perform.
-     * @param body - The SOAP body.
-     * @param useCache - Whether to use caching for this request.
-     */
-    private async dlnaSoapAction(serviceType: string, action: string, body: string, useCache = false): Promise<any> {
-        const cacheKey = `${serviceType}:${action}:${body}`;
-
-        // Check cache for certain actions
-        if (useCache && this.soapCache.has(cacheKey)) {
-            const cached = this.soapCache.get(cacheKey)!;
-            if (Date.now() - cached.timestamp < CACHE_TTL) {
-                return cached.data;
-            }
-        }
-
-        const device = this.currentDevice!;
-        const baseUrl = device.location.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
-        const servicePath = device.services![serviceType].replace(/^\/+/, '');
-        const serviceUrl = `${baseUrl}/${servicePath}`;
-
-        let lastError: Error | null = null;
-
-        // Retry logic
-        for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-                const response = await fetch(serviceUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'text/xml; charset="utf-8"',
-                        'SOAPACTION': `"${serviceType}#${action}"`,
-                    },
-                    body: this.wrapSoapBody(serviceType, action, body),
-                    signal: controller.signal,
-                });
-
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
-                }
-
-                const xml = await response.text();
-                const parsed = this.xmlParser.parse(xml);
-
-                if (!parsed?.['s:Envelope']?.['s:Body']) {
-                    throw new Error('Invalid SOAP response structure');
-                }
-
-                const result = parsed['s:Envelope']['s:Body'];
-
-                // Cache if requested
-                if (useCache) {
-                    this.soapCache.set(cacheKey, {data: result, timestamp: Date.now()});
-                }
-
-                return result;
-
-            } catch (err) {
-                lastError = err as Error;
-                if (attempt < MAX_RETRY_ATTEMPTS - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-                }
-            }
-        }
-
-        throw lastError;
-    }
 
     /**
      * Wraps SOAP body dynamically based on serviceType.
@@ -861,7 +943,6 @@ ${body}
         const poll = async () => {
             try {
                 if (!await this.checkNetworkAndDevice()) {
-                    console.log('Network/device check failed, disconnecting');
                     this.disconnect();
                     return;
                 }
@@ -869,8 +950,6 @@ ${body}
                 const status = await this.getStatus();
                 this.emit('stateChanged', status);
                 this.emit('progressChanged', status.position);
-
-                console.log(`Poll update - Position: ${Math.floor(status.position)}s/${Math.floor(status.duration)}s, Playing: ${status.isPlaying}`);
 
             } catch (err) {
                 console.warn('Polling error:', err);
@@ -881,7 +960,6 @@ ${body}
         };
 
         // Start first poll immediately
-        console.log(`Starting polling every ${CastConfig.DEFAULT_POLL_INTERVAL}ms`);
         poll();
     }
 
@@ -1026,18 +1104,13 @@ ${body}
         try {
             // Clear cache to ensure fresh data
             this.soapCache.clear();
-
             // Wait a bit longer for the device to process the command
             await new Promise(resolve => setTimeout(resolve, 500));
-
             const status = await this.getStatus();
             this.emit('stateChanged', status);
             this.emit('progressChanged', status.position);
 
-            console.log('Force status update:', status);
         } catch (err) {
-            console.warn('Force status update failed:', err);
-            // Don't emit error, regular polling will handle it
         }
     }
 
