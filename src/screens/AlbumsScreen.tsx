@@ -10,7 +10,7 @@ import AlbumItem from "../componants/items/AlbumItem";
 import {RootStackParamList} from "./Main";
 import {NativeStackScreenProps} from "@react-navigation/native-stack";
 
-// Props type including the playerHeight from navigation params
+
 export type AlbumsProps = NativeStackScreenProps<RootStackParamList, "Albums"> & {
     playerHeight: number;
 };
@@ -26,43 +26,67 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
     const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
 
     /**
-     * Get albums from device - handles permission request if needed
-     */
-    const getAlbums: () => Promise<Album[]> = async () => {
-        if (permissionResponse?.status !== 'granted') {
-            requestPermission().then(permissionResponse => {
-                if (permissionResponse.status === 'granted') {
-                    return fetchGalleries();
-                }
-                return [];
-            });
-        }
-        return fetchGalleries();
-    }
-
-    /**
      * Fetch galleries/albums from MediaLibrary
      */
     const fetchGalleries = async () => {
-        const albums = await MediaLibrary.getAlbumsAsync({
-            includeSmartAlbums: true,
-        });
-        // Sort albums by number of media inside (descending)
-        albums.sort((a, b) => a.assetCount > b.assetCount ? -1 : 1);
-        return albums;
+        try {
+            const albums = await MediaLibrary.getAlbumsAsync({
+                includeSmartAlbums: true,
+            });
+            // Sort albums by number of media inside (descending)
+            albums.sort((a, b) => a.assetCount > b.assetCount ? -1 : 1);
+            return albums;
+        } catch (error) {
+            console.error('Error fetching albums:', error);
+            return [];
+        }
     }
 
-    // Initialize albums on component mount
+    /**
+     * Get albums from device - handles permission request if needed
+     */
+    const getAlbums = async (): Promise<Album[]> => {
+        if (permissionResponse?.status !== 'granted') {
+            const newPermission = await requestPermission();
+            if (newPermission.status === 'granted') {
+                return await fetchGalleries();
+            } else {
+                return [];
+            }
+        }
+        return await fetchGalleries();
+    }
+
+    // Initialize albums on component mount and when permissions change
     useEffect(() => {
-        (async () => {
-            const albums = await getAlbums();
-            setAlbums(albums);
-            setAppIsReady(true);
-        })();
-    }, []);
+        const initializeAlbums = async () => {
+
+
+            if (permissionResponse?.status === 'granted') {
+                const albums = await fetchGalleries();
+                setAlbums(albums);
+                setAppIsReady(true);
+            } else if (permissionResponse?.status === 'denied') {
+                // Permission denied, show empty state or request again
+                setAlbums([]);
+                setAppIsReady(true);
+            } else if (permissionResponse?.status === 'undetermined') {
+                // Permission not yet requested, request it
+                const albums = await getAlbums();
+                setAlbums(albums);
+                setAppIsReady(true);
+            }
+            // If permissionResponse is null, wait for it to be determined
+        };
+
+        // Only run when permissionResponse is available
+        if (permissionResponse !== null) {
+            initializeAlbums();
+        }
+    }, [permissionResponse?.status]);
 
     // Show loading indicator while initializing
-    if (!appIsReady) {
+    if (!appIsReady || permissionResponse === null) {
         return (
             <PaperProvider theme={theme}>
                 <View style={{
