@@ -31,8 +31,14 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const [showVolumeControls, setShowVolumeControls] = useState(false);
     const [previousVolume, setPreviousVolume] = useState<number>(0.5);
 
+    // Add local volume state to handle optimistic updates
+    const [localVolume, setLocalVolume] = useState<number>(0.5);
+    const [localMuted, setLocalMuted] = useState<boolean>(false);
+    const [isVolumeChanging, setIsVolumeChanging] = useState(false);
+
     // Refs for managing state
     const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const volumeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     const styles = useStyles(theme);
 
@@ -74,12 +80,34 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
         }
     }, [playbackState?.isPlaying]);
 
+    // Sync local volume state with playback state when not changing volume
+    useEffect(() => {
+        if (playbackState && !isVolumeChanging) {
+            setLocalVolume(playbackState.volume || 0);
+            setLocalMuted(playbackState.muted || playbackState.volume === 0);
+        }
+    }, [playbackState?.volume, playbackState?.muted, isVolumeChanging]);
+
     /**
      * Get the display value for the slider - prioritize user action
      */
     const getSliderValue = useCallback(() => {
         return userSeekValue !== null ? userSeekValue : progress;
     }, [userSeekValue, progress]);
+
+    /**
+     * Get the current volume value to display - prioritize local state during changes
+     */
+    const getCurrentVolume = useCallback(() => {
+        return isVolumeChanging ? localVolume : (playbackState?.volume || 0);
+    }, [isVolumeChanging, localVolume, playbackState?.volume]);
+
+    /**
+     * Get the current mute state to display - prioritize local state during changes
+     */
+    const getCurrentMuteState = useCallback(() => {
+        return isVolumeChanging ? localMuted : (playbackState?.muted || (playbackState?.volume || 0) === 0);
+    }, [isVolumeChanging, localMuted, playbackState?.muted, playbackState?.volume]);
 
     /**
      * Handle direct seek to position
@@ -196,13 +224,39 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     }, [castManager, isLoading]);
 
     /**
-     * Handle volume change
+     * Handle volume change with optimistic UI updates
      */
     const handleVolumeChange = useCallback(async (volume: number) => {
+        const normalizedVolume = volume / 100; // Convert percentage to 0-1
+
+        // Store current volume as previous if it's greater than 0
+        if (normalizedVolume > 0) {
+            setPreviousVolume(normalizedVolume);
+        }
+
+        // Set optimistic UI state immediately
+        setIsVolumeChanging(true);
+        setLocalVolume(normalizedVolume);
+        setLocalMuted(normalizedVolume === 0);
+
+        // Clear any existing timeout
+        if (volumeTimeoutRef.current) {
+            clearTimeout(volumeTimeoutRef.current);
+        }
+
         try {
-            await castManager.setVolume(volume / 100); // Convert percentage to 0-1
+            await castManager.setVolume(normalizedVolume);
+
+            // Reset volume changing state after a delay to allow the server state to sync
+            volumeTimeoutRef.current = setTimeout(() => {
+                setIsVolumeChanging(false);
+            }, 2000); // Increased timeout to 2 seconds for better sync
+
         } catch (error) {
             console.error('Volume change failed:', error);
+
+            // On error, revert to server state immediately
+            setIsVolumeChanging(false);
         }
     }, [castManager]);
 
@@ -232,21 +286,38 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     }, [asset]);
 
     /**
-     * Handle mute toggle with fallback to volume control
+     * Handle mute toggle with optimistic UI updates
      */
     const handleMuteToggle = useCallback(async () => {
         if (!playbackState) return;
 
-        const currentVolume = playbackState.volume || 0;
-        const isMuted = playbackState.muted || currentVolume === 0;
+        const currentVolume = getCurrentVolume();
+        const isMuted = getCurrentMuteState();
+
+        // Store current non-zero volume before muting, but only if we're not already muted
+        if (!isMuted && currentVolume > 0) {
+            setPreviousVolume(currentVolume);
+        }
+
+        // Set optimistic UI state immediately
+        setIsVolumeChanging(true);
+
+        // Clear any existing timeout
+        if (volumeTimeoutRef.current) {
+            clearTimeout(volumeTimeoutRef.current);
+        }
 
         try {
             if (isMuted) {
                 // Unmuting - restore to previous volume or 50%
                 const targetVolume = previousVolume > 0 ? previousVolume : 0.5;
+                setLocalVolume(targetVolume);
+                setLocalMuted(false);
                 await castManager.setVolume(targetVolume);
             } else {
                 // Muting - set volume to 0
+                setLocalVolume(0);
+                setLocalMuted(true);
                 await castManager.setVolume(0);
             }
 
@@ -254,12 +325,21 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
             try {
                 await castManager.mute(!isMuted);
             } catch (muteError) {
+                console.warn('Native mute failed, using volume control only:', muteError);
             }
+
+            // Reset volume changing state after a longer delay to ensure device has time to respond
+            volumeTimeoutRef.current = setTimeout(() => {
+                setIsVolumeChanging(false);
+            }, 2500); // Increased timeout to 2.5 seconds
 
         } catch (error) {
             console.error('Mute toggle failed completely:', error);
+
+            // On error, revert to server state immediately
+            setIsVolumeChanging(false);
         }
-    }, [castManager, playbackState, previousVolume]);
+    }, [castManager, getCurrentVolume, getCurrentMuteState, previousVolume]);
 
     /**
      * Format time in MM:SS or HH:MM:SS format
@@ -267,11 +347,15 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const formatTime = useCallback((seconds: number): string => {
         return CastUtils.formatDuration(seconds);
     }, []);
-    // Cleanup timeout on unmount
+
+    // Cleanup timeouts on unmount
     useEffect(() => {
         return () => {
             if (seekTimeoutRef.current) {
                 clearTimeout(seekTimeoutRef.current);
+            }
+            if (volumeTimeoutRef.current) {
+                clearTimeout(volumeTimeoutRef.current);
             }
         };
     }, []);
@@ -385,7 +469,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                     {!isImageMedia() && (
                                         <View style={styles.volumeSection}>
                                             <IconButton
-                                                icon={playbackState.muted || (playbackState.volume || 0) == 0 ? "volume-off" : "volume-high"}
+                                                icon={getCurrentMuteState() ? "volume-off" : "volume-high"}
                                                 size={20}
                                                 onPress={handleMuteToggle}
                                                 disabled={isLoading}
@@ -393,7 +477,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                             <View style={styles.volumeSliderContainer}>
                                                 <Slider
                                                     style={styles.volumeSlider}
-                                                    value={CastUtils.volumeToPercentage(playbackState.volume || 0)}
+                                                    value={CastUtils.volumeToPercentage(getCurrentVolume())}
                                                     onSlidingComplete={(value) => handleVolumeChange(value)}
                                                     minimumValue={0}
                                                     maximumValue={100}
@@ -405,7 +489,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
                                                 />
                                             </View>
                                             <Text style={styles.volumeText}>
-                                                {(playbackState.muted || (playbackState.volume || 0) === 0) ? 'Muted' : `${CastUtils.volumeToPercentage(playbackState.volume || 0)}%`}
+                                                {getCurrentMuteState() ? 'Muted' : `${CastUtils.volumeToPercentage(getCurrentVolume())}%`}
                                             </Text>
                                         </View>
                                     )}

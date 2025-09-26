@@ -858,6 +858,9 @@ ${body}
      */
     private async dlnaSetVolume(volume: number): Promise<void> {
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'SetVolume', `<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>${volume}</DesiredVolume>`);
+
+        // Clear volume and mute cache after volume change
+        this.clearVolumeCache();
     }
 
     /**
@@ -866,6 +869,23 @@ ${body}
      */
     private async dlnaSetMute(muted: boolean): Promise<void> {
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'SetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>${muted ? 1 : 0}</DesiredMute>`);
+
+        // Clear volume and mute cache after mute change
+        this.clearVolumeCache();
+    }
+
+    /**
+     * Clear volume and mute related cache entries
+     */
+    private clearVolumeCache(): void {
+        const volumeKeys = Array.from(this.soapCache.keys()).filter(key =>
+            key.includes('GetVolume') || key.includes('GetMute')
+        );
+
+        volumeKeys.forEach(key => {
+            this.soapCache.delete(key);
+        });
+
     }
 
     /**
@@ -875,31 +895,45 @@ ${body}
     private async dlnaGetStatus(): Promise<PlaybackState> {
         try {
             // Don't cache position info - we need real-time data
+            // Also don't cache volume/mute during active volume changes
             const [posInfo, transInfo, volInfo, muteInfo, mediaInfo] = await Promise.all([
                 this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetPositionInfo', `<InstanceID>0</InstanceID>`, false),
                 this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetTransportInfo', `<InstanceID>0</InstanceID>`, false),
-                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetVolume', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, true),
-                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, true),
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetVolume', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, false), // Don't cache volume
+                this.dlnaSoapAction('urn:schemas-upnp-org:service:RenderingControl:1', 'GetMute', `<InstanceID>0</InstanceID><Channel>Master</Channel>`, false), // Don't cache mute
                 this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'GetMediaInfo', `<InstanceID>0</InstanceID>`, true)
             ]);
+
             const position = this.timeToSeconds(posInfo['u:GetPositionInfoResponse']?.RelTime || '00:00:00');
             const duration = this.timeToSeconds(mediaInfo['u:GetMediaInfoResponse']?.MediaDuration || '00:00:00');
             const isPlaying = transInfo['u:GetTransportInfoResponse']?.CurrentTransportState === 'PLAYING';
-            const volume = parseInt(volInfo['u:GetVolumeResponse']?.CurrentVolume || '50', 10) / 100;
+            
+            const rawVolume = volInfo['u:GetVolumeResponse']?.CurrentVolume;
+            const volume = (rawVolume !== undefined && rawVolume !== null) ? parseInt(rawVolume, 10) / 100 : 0.5;
 
-
-            // Handle mute state - some devices don't support GetMute, others report incorrectly
+            // Handle mute state more carefully
             let muted = false;
+            let deviceSupportsMute = true;
+
             try {
-                muted = muteInfo['u:GetMuteResponse']?.CurrentMute === '1';
-            } catch {
-                // If GetMute fails, consider volume 0 as muted
-                muted = volume === 0;
+                // Try to get mute status from the device
+                const muteValue = muteInfo['u:GetMuteResponse']?.CurrentMute;
+                if (muteValue !== undefined && muteValue !== null) {
+                    muted = muteValue === '1' || muteValue === 1 || muteValue === true;
+                } else {
+                    // Device doesn't support GetMute properly, fall back to volume check
+                    deviceSupportsMute = false;
+                }
+            } catch (muteError) {
+                // GetMute failed completely, device doesn't support it
+                deviceSupportsMute = false;
+                console.warn('Device does not support GetMute, using volume-based mute detection');
             }
 
-            // Some devices report mute status incorrectly, use volume as fallback
-            if (!muted && volume === 0) {
-                muted = true;
+            // If device doesn't support native mute, use volume-based logic
+            // Also use volume-based logic if volume is 0 (which should mean muted)
+            if (!deviceSupportsMute || volume === 0) {
+                muted = volume === 0;
             }
 
             return {position, duration, isPlaying, volume, muted};
