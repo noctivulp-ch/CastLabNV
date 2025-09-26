@@ -75,5 +75,12 @@
     "mediaValidation": "Media validation failed: {{errors}}",
     "temporaryFailure": "Temporary failure. The operation will retry automatically."
   },
-  "disconnect": "Disconnect"
+  "disconnect": "Disconnect",
+  "date_filter": "Date Filter",
+  "select_date_range": "Select Date Range",
+  "start_date": "Start Date",
+  "end_date": "End Date",
+  "from": "From",
+  "until": "Until",
+  "save": "Save"
 }

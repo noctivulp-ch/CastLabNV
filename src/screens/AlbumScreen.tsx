@@ -1,5 +1,5 @@
 import {initTranslate} from "../localization/translate";
-import {ActivityIndicator, Button, Menu, ProgressBar,} from 'react-native-paper';
+import {ActivityIndicator, Button, IconButton, Menu, ProgressBar, Text} from 'react-native-paper';
 import React, {useCallback, useContext, useEffect, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import {useDispatch} from "react-redux";
@@ -10,11 +10,19 @@ import {RootStackParamList} from "./Main";
 import {NativeStackScreenProps} from "@react-navigation/native-stack";
 import AssetItem from "../componants/items/AssetItem";
 import {addToAssets, setCurrentAsset} from "../store/slice/castSlice";
-
+import {DatePickerModal} from 'react-native-paper-dates';
 
 export type AlbumProps = NativeStackScreenProps<RootStackParamList, "Album"> & {
     playerHeight: number;
 };
+
+/**
+ * Date range interface for filtering media
+ */
+interface DateRange {
+    startDate: Date | undefined;
+    endDate: Date | undefined;
+}
 
 const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
     const i18n = initTranslate();
@@ -39,6 +47,13 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
     const [sortWidth, setSortWidth] = useState<SortByValue | undefined>(undefined);
     const [sortHeight, setSortHeight] = useState<SortByValue | undefined>(undefined);
     const [sortBy, setSortBy] = useState<SortByValue[]>([sortModificationTimeAsc]);
+
+    // Date filtering state
+    const [dateRange, setDateRange] = useState<DateRange>({
+        startDate: undefined,
+        endDate: undefined
+    });
+    const [datePickerOpen, setDatePickerOpen] = useState(false);
 
     // Media assets state
     const [asset, setAsset] = useState<Asset[]>([]);
@@ -72,22 +87,48 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
     }, [sortModificationTimeAsc, sortCreationTimeAsc, sortDuration, sortWidth, sortHeight]);
 
     /**
-     * Fetch initial assets when type or sorting changes
+     * Build AssetsOptions with date filtering using createdAfter and createdBefore
+     */
+    const buildAssetsOptions = useCallback((afterCursor?: string): AssetsOptions => {
+        const options: AssetsOptions = {
+            album: album,
+            mediaType: type,
+            sortBy: sortBy
+        };
+
+        // Add date filtering using MediaLibrary API options
+        if (dateRange.startDate) {
+            options.createdAfter = dateRange.startDate.getTime();
+        }
+
+        if (dateRange.endDate) {
+            // Set end date to end of day (23:59:59)
+            const endOfDay = new Date(dateRange.endDate);
+            endOfDay.setHours(23, 59, 59, 999);
+            options.createdBefore = endOfDay.getTime();
+        }
+
+        // Add cursor for pagination
+        if (afterCursor) {
+            options.after = afterCursor;
+        }
+
+        return options;
+    }, [album, type, sortBy, dateRange]);
+
+    /**
+     * Fetch initial assets when type, sorting, or date filter changes
      */
     useEffect(() => {
         (async () => {
-            const assetsPhotoOptions: AssetsOptions = {
-                album: album,
-                mediaType: type,
-                sortBy: sortBy
-            };
+            const assetsPhotoOptions = buildAssetsOptions();
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
 
             setAsset(assetsPhoto.assets);
             setEndCursor(assetsPhoto.endCursor);
             setAlbumReady(true);
         })();
-    }, [type, sortBy]);
+    }, [buildAssetsOptions]);
 
     /**
      * Load more media assets when user reaches end of list
@@ -98,19 +139,14 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
         }
         setLoadMoreData(true);
 
-        const assetsPhotoOptions: AssetsOptions = {
-            album: album,
-            mediaType: type,
-            after: endCursor,
-            sortBy: sortBy
-        };
-
+        const assetsPhotoOptions = buildAssetsOptions(endCursor);
         const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
+
         const newAsset = [...asset, ...assetsPhoto.assets];
         setAsset(newAsset);
         setEndCursor(assetsPhoto.endCursor);
         setLoadMoreData(false);
-    }, [loadMoreData, album, type, endCursor, asset, sortBy]);
+    }, [loadMoreData, buildAssetsOptions, endCursor, asset]);
 
     /**
      * Handle asset selection for casting
@@ -119,6 +155,45 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
         dispatch(setCurrentAsset(asset));
         dispatch(addToAssets(asset));
     }, [dispatch]);
+
+    /**
+     * Handle date range selection from date picker
+     */
+    const onDateRangeConfirm = useCallback(({startDate, endDate}: {
+        startDate: Date | undefined,
+        endDate: Date | undefined
+    }) => {
+        setDateRange({startDate, endDate});
+        setDatePickerOpen(false);
+    }, []);
+
+    /**
+     * Clear date filter
+     */
+    const clearDateFilter = useCallback(() => {
+        setDateRange({startDate: undefined, endDate: undefined});
+    }, []);
+
+    /**
+     * Get date range display text for the info line
+     */
+    const getDateRangeDisplayText = useCallback(() => {
+        if (!dateRange.startDate && !dateRange.endDate) {
+            return null;
+        }
+
+        const formatDate = (date: Date) => date.toLocaleDateString();
+
+        if (dateRange.startDate && dateRange.endDate) {
+            return `${formatDate(dateRange.startDate)} - ${formatDate(dateRange.endDate)}`;
+        } else if (dateRange.startDate) {
+            return `${i18n.t('from')} ${formatDate(dateRange.startDate)}`;
+        } else if (dateRange.endDate) {
+            return `${i18n.t('until')} ${formatDate(dateRange.endDate)}`;
+        }
+
+        return null;
+    }, [dateRange, i18n]);
 
     /**
      * Get trailing icon for duration sorting menu item
@@ -258,7 +333,36 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
                         setSortByMenuVisible(false);
                     }} title={i18n.t('reset')}/>
                 </Menu>
+
+                {/* Date filter button */}
+                <Button
+                    icon="calendar-range"
+                    mode={dateRange.startDate || dateRange.endDate ? "contained" : "contained-tonal"}
+                    onPress={() => setDatePickerOpen(true)}
+                    style={styles.dateFilterButton}
+                >
+                    {i18n.t('date_filter')}
+                </Button>
+
+                {/* Clear date filter button - only show when filter is active */}
+                {(dateRange.startDate || dateRange.endDate) && (
+                    <IconButton
+                        icon="close"
+                        mode="contained-tonal"
+                        onPress={clearDateFilter}
+                        size={20}
+                    />
+                )}
             </View>
+
+            {/* Date range info line - only show when filter is active */}
+            {getDateRangeDisplayText() && (
+                <View style={styles.dateRangeInfo}>
+                    <Text variant="bodySmall" style={[styles.dateRangeText, {color: theme.colors.onSurfaceVariant}]}>
+                        {getDateRangeDisplayText()}
+                    </Text>
+                </View>
+            )}
 
             {/* Asset list with dynamic padding for PlayerController */}
             <FlatList
@@ -289,6 +393,22 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
                 color={theme.colors.primary}
                 visible={loadMoreData}
             />
+
+            {/* Date Range Picker Modal */}
+            <DatePickerModal
+                locale="en"
+                mode="range"
+                visible={datePickerOpen}
+                onDismiss={() => setDatePickerOpen(false)}
+                startDate={dateRange.startDate}
+                endDate={dateRange.endDate}
+                onConfirm={onDateRangeConfirm}
+                saveLabel={i18n.t('save')}
+                label={i18n.t('select_date_range')}
+                startLabel={i18n.t('start_date')}
+                endLabel={i18n.t('end_date')}
+                animationType="slide"
+            />
         </View>
     );
 }
@@ -300,12 +420,27 @@ const styles = StyleSheet.create({
     topButtons: {
         flexDirection: "row",
         justifyContent: "space-between",
+        alignItems: "center",
         marginTop: 10,
+        flexWrap: "wrap",
+        gap: 8,
     },
     flastList: {
         marginTop: 20,
     },
-    flatListContent: {}
+    flatListContent: {},
+    dateFilterButton: {
+        flex: 1,
+        minWidth: 120,
+    },
+    dateRangeInfo: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        alignItems: "center",
+    },
+    dateRangeText: {
+        fontStyle: "italic",
+    }
 });
 
 export default AlbumScreen;
