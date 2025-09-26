@@ -85,27 +85,13 @@ export class NotificationService {
             const statusText = isPlaying ? this.i18n.t('play') : this.i18n.t('pause');
 
 
-            // Calculate progress for videos
-            let progressText = '';
-            if (playbackState && playbackState.duration > 0) {
-                const progressPercent = Math.round((playbackState.position / playbackState.duration) * 100);
-                const currentTime = this.formatTime(playbackState.position);
-                const totalTime = this.formatTime(playbackState.duration);
-
-                // Create a simple progress bar with blocks
-                const progressBlocks = Math.round(progressPercent / 10); // 0-10 blocks
-                const progressBar = '▰'.repeat(progressBlocks) + '▱'.repeat(10 - progressBlocks);
-
-                progressText = `${currentTime} ${progressBar} ${totalTime} (${progressPercent}%)`;
-            }
-
             // Setup categories BEFORE creating notification
             await this.setupNotificationCategories(isPlaying);
 
             const content: Notifications.NotificationContentInput = {
-                title: `🎵 CastLab - ${device.name}`,
+                title: `CastLab - ${device.name}`,
                 body: mediaTitle
-                    ? `${statusIcon} ${mediaTitle} • ${statusText}${progressText ? `\n${progressText}` : ''}`
+                    ? `${statusIcon} ${mediaTitle} • ${statusText}`
                     : `${this.i18n.t('cast_on')} ${device.manufacturer || 'DLNA'}`,
                 data: {
                     type: 'casting',
@@ -207,22 +193,5 @@ export class NotificationService {
         this.hideCastingNotification();
         this.notificationId = null;
         this.isInitialized = false;
-    }
-
-    /**
-     * Format time in MM:SS or HH:MM:SS format
-     */
-    private formatTime(seconds: number): string {
-        if (!seconds || seconds < 0) return '0:00';
-
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const remainingSeconds = Math.floor(seconds % 60);
-
-        if (hours > 0) {
-            return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
-        } else {
-            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-        }
     }
 }
