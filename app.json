@@ -49,8 +49,7 @@
         "expo-asset",
         {
           "assets": [
-            "./assets",
-            "./assets/webroot"
+            "./assets"
           ]
         }
       ],
