@@ -173,7 +173,6 @@ export class CastManager extends EventEmitter {
                 this.emit('error', this.i18n.t('error.deviceUnreachable'));
                 return;
             }
-
             this.currentDevice = device;
             this.startPolling();
             this.emit('connected', device);
@@ -181,6 +180,7 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.connect', {message: (err as Error).message}));
         }
     }
+
 
     /**
      * Stop media playback but keep device connected
@@ -190,31 +190,25 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
-
-        try {
-            // Send stop command to device
-            await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`);
-
-            // Clear current media info immediately
+        // Execute stop command in background with proper error handling
+        this.dlnaStop().then(() => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
 
             // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-
-            // Force a status update to sync the UI
+            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
-
-        } catch (err) {
-            // Even if DLNA stop fails, clear the media info to reset UI
+        }).catch((err) => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
+            // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-
-            this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
-        }
+            // Emit error but don't block the UI
+            this.emit('error', this.i18n.t('error.stop', {message: err.message}));
+        });
     }
 
     /**
@@ -846,6 +840,14 @@ ${body}
      */
     private async dlnaPlay(): Promise<void> {
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Play', `<InstanceID>0</InstanceID><Speed>1</Speed>`);
+    }
+
+
+    /**
+     * Stop playing media on a DLNA device.
+     */
+    private async dlnaStop(): Promise<void> {
+        await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Stop', `<InstanceID>0</InstanceID>`);
     }
 
     /**

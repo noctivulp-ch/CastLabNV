@@ -50,6 +50,7 @@
     "connect": "Connection error: {{message}}",
     "cast": "Casting error: {{message}}",
     "play": "Play error: {{message}}",
+    "stop": "Stop error: {{message}}",
     "pause": "Pause error: {{message}}",
     "seek": "Seek error: {{message}}",
     "volume": "Volume error: {{message}}",
