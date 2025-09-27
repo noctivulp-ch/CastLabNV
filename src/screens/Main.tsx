@@ -31,6 +31,7 @@ import app from "../../app.json";
 import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
+import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
 
 const rootReducer = combineReducers({})
 export type IRootState = ReturnType<typeof rootReducer>
@@ -208,6 +209,15 @@ const Main: React.FC = () => {
     const displayThemePicker = () => {
         setThemeDialogVisible(true);
     }
+
+    
+    useEffect(() => {
+        if (connectedDevice) {
+            activateKeepAwakeAsync();
+        } else {
+            deactivateKeepAwake();
+        }
+    }, [connectedDevice]);
 
     // Server management effect - starts/stops server based on device connection
     useEffect(() => {
