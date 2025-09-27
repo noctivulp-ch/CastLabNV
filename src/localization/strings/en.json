@@ -82,5 +82,12 @@
   "end_date": "End Date",
   "from": "From",
   "until": "Until",
-  "save": "Save"
+  "save": "Save",
+  "autoplay": "Autoplay",
+  "autoplay_indication": "Auto-advance on media end",
+  "loading_media_assets": "Loading media assets...",
+  "item": "item",
+  "items": "items",
+  "more_available": "more available",
+  "loading": "Loading"
 }

@@ -1,6 +1,6 @@
 import {initTranslate} from "../localization/translate";
 import {ActivityIndicator, Button, IconButton, Menu, ProgressBar, Text} from 'react-native-paper';
-import React, {useCallback, useContext, useEffect, useState} from "react";
+import React, {forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import {useDispatch} from "react-redux";
 import {FlatList, StyleSheet, View} from "react-native";
@@ -9,7 +9,7 @@ import {Asset, AssetsOptions, PagedInfo, SortBy, SortByValue} from "expo-media-l
 import {RootStackParamList} from "./Main";
 import {NativeStackScreenProps} from "@react-navigation/native-stack";
 import AssetItem from "../componants/items/AssetItem";
-import {addToAssets, setCurrentAsset} from "../store/slice/castSlice";
+import {addToAssets, setAssets, setCurrentAsset} from "../store/slice/castSlice";
 import {DatePickerModal} from 'react-native-paper-dates';
 import {useScrollDirection} from "../hooks/useScrollDirection";
 
@@ -26,7 +26,14 @@ interface DateRange {
     endDate: Date | undefined;
 }
 
-const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirectionChange}) => {
+/**
+ * Ref interface for AlbumScreen to expose loadMoreAssets method
+ */
+export interface AlbumScreenRef {
+    loadMoreAssets: () => Promise<void>;
+}
+
+const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight, onScrollDirectionChange}, ref) => {
     const i18n = initTranslate();
 
     // Extract navigation parameters
@@ -60,6 +67,7 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
     // Media assets state
     const [asset, setAsset] = useState<Asset[]>([]);
     const [endCursor, setEndCursor] = useState<string>();
+    const [hasMore, setHasMore] = useState(true);
 
     // UI state for menus and filters
     const [typeIcon, setTypeIcon] = useState<string>("select-all");
@@ -72,6 +80,46 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
         onScrollDirectionChange,
         threshold: 10 // Standard threshold for asset screen
     });
+
+    /**
+     * Load more media assets - used by autoplay when reaching end
+     */
+    const loadMoreAssets = useCallback(async (): Promise<void> => {
+        if (loadMoreData || !hasMore) {
+            return;
+        }
+
+        setLoadMoreData(true);
+
+        try {
+            const assetsPhotoOptions = buildAssetsOptions(endCursor);
+            const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
+
+            if (assetsPhoto.assets.length > 0) {
+                const newAssets = [...asset, ...assetsPhoto.assets];
+                setAsset(newAssets);
+
+                // Update the Redux store with the complete asset list for autoplay
+                dispatch(setAssets(newAssets));
+
+                setEndCursor(assetsPhoto.endCursor);
+                setHasMore(assetsPhoto.hasNextPage);
+
+            } else {
+                setHasMore(false);
+            }
+        } catch (error) {
+            console.error('AlbumScreen: Failed to load more assets:', error);
+            throw error; // Re-throw so autoplay can handle the error
+        } finally {
+            setLoadMoreData(false);
+        }
+    }, [loadMoreData, hasMore, endCursor, asset, dispatch]);
+
+    // Expose loadMoreAssets method via ref for autoplay
+    useImperativeHandle(ref, () => ({
+        loadMoreAssets
+    }), [loadMoreAssets]);
 
     /**
      * Update sorting criteria whenever individual sort options change
@@ -101,7 +149,8 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
         const options: AssetsOptions = {
             album: album,
             mediaType: type,
-            sortBy: sortBy
+            sortBy: sortBy,
+            first: 50 // Load more items per batch for better autoplay performance
         };
 
         // Add date filtering using MediaLibrary API options
@@ -129,41 +178,53 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
      */
     useEffect(() => {
         (async () => {
+            setHasMore(true);
+
             const assetsPhotoOptions = buildAssetsOptions();
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
 
             setAsset(assetsPhoto.assets);
             setEndCursor(assetsPhoto.endCursor);
+            setHasMore(assetsPhoto.hasNextPage);
             setAlbumReady(true);
+
+            // Update Redux store with initial assets for autoplay
+            dispatch(setAssets(assetsPhoto.assets));
+
             resetScroll();
         })();
-    }, [buildAssetsOptions, resetScroll]);
+    }, [buildAssetsOptions, resetScroll, dispatch]);
 
     /**
-     * Load more media assets when user reaches end of list
+     * Load more media assets when user reaches end of list (manual scrolling)
      */
     const fetchMoreMedia = useCallback(async () => {
-        if (loadMoreData) {
+        if (loadMoreData || !hasMore) {
             return;
         }
-        setLoadMoreData(true);
 
-        const assetsPhotoOptions = buildAssetsOptions(endCursor);
-        const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
-
-        const newAsset = [...asset, ...assetsPhoto.assets];
-        setAsset(newAsset);
-        setEndCursor(assetsPhoto.endCursor);
-        setLoadMoreData(false);
-    }, [loadMoreData, buildAssetsOptions, endCursor, asset]);
+        await loadMoreAssets();
+    }, [loadMoreAssets, loadMoreData, hasMore]);
 
     /**
      * Handle asset selection for casting
      */
-    const assetPressed = useCallback(async (asset: Asset) => {
-        dispatch(setCurrentAsset(asset));
-        dispatch(addToAssets(asset));
-    }, [dispatch]);
+    const assetPressed = useCallback(async (selectedAsset: Asset) => {
+
+        // Set the current asset for casting
+        dispatch(setCurrentAsset(selectedAsset));
+        dispatch(addToAssets(selectedAsset));
+
+        // Ensure we have a good buffer of assets loaded for autoplay
+        if (asset.length < 30 && hasMore && !loadMoreData) {
+            try {
+                await loadMoreAssets();
+            } catch (error) {
+                console.warn('AlbumScreen: Failed to preload assets:', error);
+                // Don't block the casting if preloading fails
+            }
+        }
+    }, [dispatch, asset.length, hasMore, loadMoreData, loadMoreAssets]);
 
     /**
      * Handle date range selection from date picker
@@ -248,6 +309,9 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
                 backgroundColor: theme.colors.background
             }}>
                 <ActivityIndicator size="large"/>
+                <Text style={{marginTop: 16, color: theme.colors.onSurface}}>
+                    {i18n.t('loading_media_assets')}
+                </Text>
             </View>
         )
     }
@@ -373,6 +437,19 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
                 </View>
             )}
 
+            {/* Assets count and loading indicator */}
+            <View style={styles.statusBar}>
+                <Text variant="bodySmall" style={[styles.statusText, {color: theme.colors.onSurfaceVariant}]}>
+                    {asset.length} {asset.length === 1 ? i18n.t('item') : i18n.t('items')}
+                    {hasMore && ` (${i18n.t('more_available')})`}
+                </Text>
+                {loadMoreData && (
+                    <Text variant="bodySmall" style={[styles.loadingText, {color: theme.colors.primary}]}>
+                        {i18n.t('loading')}...
+                    </Text>
+                )}
+            </View>
+
             {/* Asset list with dynamic padding for PlayerController */}
             <FlatList
                 data={asset}
@@ -380,7 +457,7 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
                     <AssetItem asset={item} onPressed={assetPressed.bind(this, item)}/>
                 )}
                 style={styles.flastList}
-                onEndReachedThreshold={0.1}
+                onEndReachedThreshold={0.3} // Load more when 30% from bottom
                 onEndReached={fetchMoreMedia}
                 keyExtractor={(item) => item.id}
                 onScroll={handleScroll}
@@ -396,6 +473,12 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
                 scrollIndicatorInsets={
                     playerHeight > 0 ? {bottom: playerHeight} : undefined
                 }
+                // Performance optimizations for large lists
+                removeClippedSubviews={true}
+                initialNumToRender={20}
+                maxToRenderPerBatch={10}
+                windowSize={10}
+                getItemLayout={undefined} // Let FlatList calculate for AssetItem
             />
 
             {/* Loading progress bar */}
@@ -403,6 +486,7 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
                 indeterminate={true}
                 color={theme.colors.primary}
                 visible={loadMoreData}
+                style={styles.progressBar}
             />
 
             {/* Date Range Picker Modal */}
@@ -422,7 +506,7 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirecti
             />
         </View>
     );
-}
+});
 
 const styles = StyleSheet.create({
     container: {
@@ -433,13 +517,31 @@ const styles = StyleSheet.create({
         justifyContent: "space-between",
         alignItems: "center",
         marginTop: 10,
+        marginHorizontal: 16,
         flexWrap: "wrap",
         gap: 8,
     },
-    flastList: {
-        marginTop: 20,
+    statusBar: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 8,
     },
-    flatListContent: {},
+    statusText: {
+        fontSize: 12,
+    },
+    loadingText: {
+        fontSize: 12,
+        fontStyle: 'italic',
+    },
+    flastList: {
+        flex: 1,
+        marginTop: 8,
+    },
+    flatListContent: {
+        paddingHorizontal: 8,
+    },
     dateFilterButton: {
         flex: 1,
         minWidth: 120,
@@ -451,7 +553,15 @@ const styles = StyleSheet.create({
     },
     dateRangeText: {
         fontStyle: "italic",
-    }
+    },
+    progressBar: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+    },
 });
+
+AlbumScreen.displayName = 'AlbumScreen';
 
 export default AlbumScreen;

@@ -2,8 +2,8 @@ import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-na
 import {NavigationContainer} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
-import AlbumsScreen from "./AlbumsScreen";
-import {combineReducers} from "@reduxjs/toolkit";
+import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
+import {combineReducers, configureStore} from "@reduxjs/toolkit";
 import {Appearance, GestureResponderEvent, Linking, Platform} from "react-native";
 import {SETTINGS_THEME} from "../constants/AsyncStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -12,9 +12,9 @@ import {createNativeStackNavigator} from "@react-navigation/native-stack";
 import CustomAppBar from "../componants/menu/CustomAppBar";
 import {initTranslate} from "../localization/translate";
 import {Album, Asset} from "expo-media-library";
-import AlbumScreen from "./AlbumScreen";
+import AlbumScreen, {AlbumScreenRef} from "./AlbumScreen";
 import {Device} from '../DLNACast/types/Device';
-import {useSelector} from "react-redux";
+import {Provider as ReduxProvider, useSelector} from "react-redux";
 import CastDevicesPopup from "../componants/popup/CastDevicesPopup";
 import {SERVER_PORT} from "../constants/Values";
 import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
@@ -32,9 +32,25 @@ import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
+import castReducer from "../store/slice/castSlice";
 
-const rootReducer = combineReducers({})
-export type IRootState = ReturnType<typeof rootReducer>
+const rootReducer = combineReducers({
+    cast: castReducer,
+});
+
+// Configure the Redux store
+const store = configureStore({
+    reducer: rootReducer,
+    middleware: (getDefaultMiddleware) =>
+        getDefaultMiddleware({
+            serializableCheck: {
+                // Ignore these action types for serializable check
+                ignoredActions: ['persist/PERSIST', 'persist/REHYDRATE'],
+            },
+        }),
+});
+
+export type IRootState = ReturnType<typeof rootReducer>;
 
 // Navigation parameter types
 export type RootStackParamList = {
@@ -46,7 +62,7 @@ export type RootStackParamList = {
 
 const isIOS = Platform.OS === 'ios';
 
-const Main: React.FC = () => {
+const MainContent: React.FC = () => {
     const {setTheme, theme, statusBarTheme, type: themeType} = useContext(ThemeContext);
     const Stack = createNativeStackNavigator<RootStackParamList>();
     const i18n = initTranslate();
@@ -64,8 +80,9 @@ const Main: React.FC = () => {
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
 
-    // Player height management - tracks the actual height of the PlayerController
+    // Player height management and autoplay callback ref
     const [playerHeight, setPlayerHeight] = useState<number>(0);
+    const loadMoreAssetsRef = useRef<(() => Promise<void>) | null>(null);
 
     // Redux and database setup
     const cast = useSelector((state: IRootState) => state.cast);
@@ -103,7 +120,7 @@ const Main: React.FC = () => {
         setPlayerVisible(connectedDevice != null);
     }, [connectedDevice]);
 
-    // Handle media casting when asset changes
+    // Enhanced media casting handler with autoplay support
     useEffect(() => {
         (async () => {
             if (cast?.currentAsset) {
@@ -120,7 +137,11 @@ const Main: React.FC = () => {
                     try {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
-                        console.error(error);
+                        // Show error toast for file copy failures
+                        setToastText1("Failed to prepare media file");
+                        setToastText2("Check storage permissions and try again");
+                        setToastVisible(true);
+                        return;
                     }
                 }
 
@@ -129,24 +150,60 @@ const Main: React.FC = () => {
                 uri = `http://${ip}:${SERVER_PORT}/${serverFileName}`;
 
                 if (uri) {
-                    // Start casting the new media
-                    await castManager.castMedia({
-                        contentUrl: uri,
-                        metadata: {
+                    try {
+                        // Determine media type and build metadata
+                        const isImage = asset.mediaType === 'photo' ||
+                            (asset.filename && ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'tif']
+                                .includes(asset.filename.split('.').pop()?.toLowerCase() || ''));
+
+                        const metadata = {
                             title: asset.filename,
                             images: [{url: uri, width: asset.width, height: asset.height}],
-                        },
-                        streamDuration: asset.duration,
-                    });
+                        };
+
+                        // Start casting the new media
+                        await castManager.castMedia({
+                            contentUrl: uri,
+                            metadata,
+                            streamDuration: asset.duration || (isImage ? 0 : undefined),
+                        });
+
+                        // Show success toast for first media or when manually selecting
+                        if (cast.assets.length === 1 || cast.currentIndex === 0) {
+                            setToastText1(`Now casting: ${asset.filename}`);
+                            setToastText2(connectedDevice?.name || "");
+                            setToastVisible(true);
+                        }
+
+                    } catch (castError) {
+                        console.error('Main: Failed to cast media:', castError);
+
+                        // Show error toast for casting failures
+                        setToastText1("Failed to cast media");
+                        setToastText2((castError as Error).message || "Unknown error");
+                        setToastVisible(true);
+                    }
                 }
             }
         })();
-    }, [cast.currentAsset]);
+    }, [cast?.currentAsset, connectedDevice?.name]);
+
+    /**
+     * Callback for autoplay to load more assets from the current screen
+     */
+    const handleLoadMoreAssets = useCallback(async () => {
+        if (loadMoreAssetsRef.current) {
+            try {
+                await loadMoreAssetsRef.current();
+            } catch (error) {
+                console.error('Main: Failed to load more assets:', error);
+            }
+        }
+    }, []);
 
     /**
      * Callback to handle scroll direction changes from screens
      * This is called when user scrolls up/down in the media lists
-     * @param isScrollingDown - True when scrolling down, false when scrolling up
      */
     const handleScrollDirectionChange = useCallback((isScrollingDown: boolean) => {
         setPlayerCompactMode(isScrollingDown);
@@ -164,8 +221,23 @@ const Main: React.FC = () => {
      * Handle device selection from cast popup
      */
     const devicePressedHandler = useCallback(async (event: GestureResponderEvent, device: Device) => {
-        await castManager.connect(device);
-        setCastDialogVisible(false);
+        try {
+            await castManager.connect(device);
+            setCastDialogVisible(false);
+
+            // Show connection success toast
+            setToastText1(`Connected to ${device.name}`);
+            setToastText2("Ready to cast media");
+            setToastVisible(true);
+
+        } catch (connectError) {
+            console.error('Main: Failed to connect to device:', connectError);
+
+            // Show connection error toast
+            setToastText1(`Failed to connect to ${device.name}`);
+            setToastText2((connectError as Error).message || "Connection failed");
+            setToastVisible(true);
+        }
     }, [castManager]);
 
     /**
@@ -173,7 +245,20 @@ const Main: React.FC = () => {
      */
     const buttonCastPressed = async () => {
         if (castManager.isConnected()) {
-            await castManager.disconnect();
+            try {
+                await castManager.disconnect();
+
+                // Show disconnection toast
+                setToastText1("Disconnected from cast device");
+                setToastText2("");
+                setToastVisible(true);
+
+            } catch (disconnectError) {
+                console.error('Main: Failed to disconnect:', disconnectError);
+                setToastText1("Failed to disconnect");
+                setToastText2((disconnectError as Error).message || "Disconnect failed");
+                setToastVisible(true);
+            }
         } else {
             if (castManager.isSearching()) {
                 await castManager.stopSearch();
@@ -192,7 +277,7 @@ const Main: React.FC = () => {
             await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, {idempotent: true});
             await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, {intermediates: true});
         } catch (error) {
-            console.error('Error in deleteFiles:', error);
+            console.error('Main: Error in deleteFiles:', error);
         }
     };
 
@@ -210,7 +295,7 @@ const Main: React.FC = () => {
         setThemeDialogVisible(true);
     }
 
-    
+    // Keep device awake when connected for autoplay
     useEffect(() => {
         if (connectedDevice) {
             activateKeepAwakeAsync();
@@ -234,7 +319,7 @@ const Main: React.FC = () => {
                     }
                     serverRef.current = null;
                 } catch (err) {
-                    console.error('Error stopping servers:', (err as Error).message);
+                    console.error('Main: Error stopping servers:', (err as Error).message);
                 }
                 return;
             }
@@ -242,6 +327,8 @@ const Main: React.FC = () => {
             try {
                 const ip = await Network.getIpAddressAsync();
                 const fileDir = resolveAssetsPath('webroot');
+
+                console.log(`Main: Starting media server on ${ip}:${SERVER_PORT}`);
 
                 // DLNA server configuration
                 const extraConfig = `server.modules += ("mod_setenv")
@@ -264,7 +351,7 @@ const Main: React.FC = () => {
                         await downloadFile({fromUrl: favicon.uri, toFile: iconPath});
                     }
                 } catch (err) {
-                    console.error('Error when loading favicon:', (err as Error).message);
+                    console.error('Main: Error when loading favicon:', (err as Error).message);
                 }
 
                 if (isMounted) {
@@ -294,12 +381,16 @@ const Main: React.FC = () => {
                     await serverRef.current.start();
 
                     serverRef.current.addStateListener((newState, details, error) => {
-                        if (error) console.error('StaticServer error:', error);
-                        console.log('StaticServer state:', details);
+                        if (error) console.error('Main: StaticServer error:', error);
                     });
                 }
             } catch (err) {
-                console.error('Error starting servers:', (err as Error).message);
+                console.error('Main: Error starting servers:', (err as Error).message);
+
+                // Show server start error toast
+                setToastText1("Failed to start media server");
+                setToastText2("Media casting may not work properly");
+                setToastVisible(true);
             }
         };
 
@@ -312,7 +403,7 @@ const Main: React.FC = () => {
                 const stopPromises = [];
                 if (serverRef.current) {
                     stopPromises.push(
-                        serverRef.current.stop().catch((err: Error) => console.error('Error stopping StaticServer:', err.message))
+                        serverRef.current.stop().catch((err: Error) => console.error('Main: Error stopping StaticServer:', err.message))
                     );
                     serverRef.current = null;
                 }
@@ -364,17 +455,61 @@ const Main: React.FC = () => {
                         name="Albums"
                         options={{headerShown: true}}
                     >
-                        {(props) => <AlbumsScreen {...props} playerHeight={playerHeight}
-                                                  onScrollDirectionChange={handleScrollDirectionChange}/>}
+                        {(props) => {
+                            const albumsRef = useRef<AlbumsScreenRef>(null);
+
+                            // Update the ref when screen mounts
+                            useEffect(() => {
+                                if (albumsRef.current?.loadMoreAssets) {
+                                    loadMoreAssetsRef.current = albumsRef.current.loadMoreAssets;
+                                }
+
+                                // Clean up ref when unmounting
+                                return () => {
+                                    loadMoreAssetsRef.current = null;
+                                };
+                            }, []);
+
+                            return (
+                                <AlbumsScreen
+                                    {...props}
+                                    ref={albumsRef}
+                                    playerHeight={playerHeight}
+                                    onScrollDirectionChange={handleScrollDirectionChange}
+                                />
+                            );
+                        }}
                     </Stack.Screen>
 
-                    {/* Album screen with player height prop */}
+                    {/* Album screen with player height prop and autoplay support */}
                     <Stack.Screen
                         name="Album"
                         options={{headerShown: true}}
                     >
-                        {(props) => <AlbumScreen {...props} playerHeight={playerHeight}
-                                                 onScrollDirectionChange={handleScrollDirectionChange}/>}
+                        {(props) => {
+                            const albumRef = useRef<AlbumScreenRef>(null);
+
+                            // Update the ref when screen mounts
+                            useEffect(() => {
+                                if (albumRef.current?.loadMoreAssets) {
+                                    loadMoreAssetsRef.current = albumRef.current.loadMoreAssets;
+                                }
+
+                                // Clean up ref when unmounting
+                                return () => {
+                                    loadMoreAssetsRef.current = null;
+                                };
+                            }, []);
+
+                            return (
+                                <AlbumScreen
+                                    {...props}
+                                    ref={albumRef}
+                                    playerHeight={playerHeight}
+                                    onScrollDirectionChange={handleScrollDirectionChange}
+                                />
+                            );
+                        }}
                     </Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
@@ -390,7 +525,7 @@ const Main: React.FC = () => {
                 hide={() => setCastDialogVisible(false)}
             />
 
-            {/* Toast notifications */}
+            {/* Toast notifications with enhanced messages */}
             <Toast
                 type={"info"}
                 text1={toastText1}
@@ -399,21 +534,25 @@ const Main: React.FC = () => {
                 onToastHide={() => setToastVisible(false)}
             />
 
-            {/* Player controller with height change callback */}
+            {/* Enhanced Player controller with autoplay support */}
             <PlayerController
                 visible={playerVisible}
                 connectedDevice={connectedDevice}
                 onHeightChange={handlePlayerHeightChange}
                 compactMode={playerCompactMode}
+                onLoadMoreAssets={handleLoadMoreAssets}
             />
 
-            {/* About dialog */}
+            {/* About dialog with enhanced information */}
             <Portal>
                 <Dialog visible={aboutDialogVisible} onDismiss={() => setAboutDialogVisible(false)}>
                     <Dialog.Content style={{alignItems: "center"}}>
                         <Text variant="titleLarge">CastLab</Text>
                         <Text variant="labelLarge" style={{marginTop: 10}}>
                             {i18n.t('version', {version: app.expo.version})}
+                        </Text>
+                        <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center'}}>
+                            Cast your photos, videos, and audio to DLNA/UPnP devices with autoplay support
                         </Text>
                         <Text variant="bodyLarge" style={{marginTop: 20}}>
                             {i18n.t('source_code')}
@@ -442,6 +581,11 @@ const Main: React.FC = () => {
                         >
                             https://fedilab.app/page/donations/
                         </Text>
+
+                        {/* Autoplay feature highlight */}
+                        <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center', fontStyle: 'italic'}}>
+                            New: Automatic media progression with customizable timing and smart loading
+                        </Text>
                     </Dialog.Content>
                     <Dialog.Actions>
                         <Button onPress={() => setAboutDialogVisible(false)}>
@@ -457,7 +601,6 @@ const Main: React.FC = () => {
                     <Dialog.Title>{i18n.t('change_theme')}</Dialog.Title>
                     <Dialog.Content>
                         <RadioButton.Group onValueChange={value => setTheme(value)} value={themeType}>
-                            <RadioButton.Item label={i18n.t('theme_type.light')} value="light"/>
                             <RadioButton.Item label={i18n.t('theme_type.dark')} value="dark"/>
                             <RadioButton.Item label={i18n.t('theme_type.day_night')} value="auto"/>
                         </RadioButton.Group>
@@ -470,6 +613,15 @@ const Main: React.FC = () => {
                 </Dialog>
             </Portal>
         </PaperProvider>
+    );
+};
+
+// Main component with Redux Provider
+const Main: React.FC = () => {
+    return (
+        <ReduxProvider store={store}>
+            <MainContent/>
+        </ReduxProvider>
     );
 }
 

@@ -1,6 +1,6 @@
 import {initTranslate} from "../localization/translate";
 import {ActivityIndicator, PaperProvider,} from 'react-native-paper';
-import React, {useContext, useEffect, useState} from "react";
+import React, {forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import {useDispatch} from "react-redux";
 import {FlatList, StyleSheet, View} from "react-native";
@@ -16,7 +16,18 @@ export type AlbumsProps = NativeStackScreenProps<RootStackParamList, "Albums"> &
     onScrollDirectionChange?: (isScrollingDown: boolean) => void;
 };
 
-const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScrollDirectionChange}) => {
+/**
+ * Ref interface for AlbumsScreen to expose loadMoreAssets method
+ */
+export interface AlbumsScreenRef {
+    loadMoreAssets: () => Promise<void>;
+}
+
+const AlbumsScreen = forwardRef<AlbumsScreenRef, AlbumsProps>(({
+                                                                   navigation,
+                                                                   playerHeight,
+                                                                   onScrollDirectionChange
+                                                               }, ref) => {
     const i18n = initTranslate();
     const [appIsReady, setAppIsReady] = useState(false);
     const dispatch = useDispatch()
@@ -44,7 +55,7 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScroll
             albums.sort((a, b) => a.assetCount > b.assetCount ? -1 : 1);
             return albums;
         } catch (error) {
-            console.error('Error fetching albums:', error);
+            console.error('AlbumsScreen: Error fetching albums:', error);
             return [];
         }
     }
@@ -64,6 +75,20 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScroll
         return await fetchGalleries();
     }
 
+    /**
+     * Load more albums - placeholder implementation for autoplay compatibility
+     * Albums screen doesn't need to load more data, but provides the interface
+     */
+    const loadMoreAssets = useCallback(async (): Promise<void> => {
+        // Albums are loaded once, no pagination needed
+        return Promise.resolve();
+    }, []);
+
+    // Expose loadMoreAssets method via ref for autoplay compatibility
+    useImperativeHandle(ref, () => ({
+        loadMoreAssets
+    }), [loadMoreAssets]);
+
     // Initialize albums on component mount and when permissions change
     useEffect(() => {
         const initializeAlbums = async () => {
@@ -73,7 +98,7 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScroll
                 setAppIsReady(true);
                 resetScroll();
             } else if (permissionResponse?.status === 'denied') {
-                // Permission denied, show empty state or request again
+                // Permission denied, show empty state
                 setAlbums([]);
                 setAppIsReady(true);
             } else if (permissionResponse?.status === 'undetermined') {
@@ -133,7 +158,7 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScroll
             />
         </View>
     );
-}
+});
 
 const styles = StyleSheet.create({
     container: {
@@ -141,5 +166,7 @@ const styles = StyleSheet.create({
     },
     flatListContent: {}
 });
+
+AlbumsScreen.displayName = 'AlbumsScreen';
 
 export default AlbumsScreen;

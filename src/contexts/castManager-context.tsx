@@ -3,7 +3,7 @@ import {CastManager, PlaybackState} from "../DLNACast/CastManager";
 import {Device} from "../DLNACast/types/Device";
 import {CastConfig} from "../DLNACast/config/CastConfig";
 import {useDispatch} from 'react-redux';
-import {setCurrentAsset} from '../store/slice/castSlice';
+import {clearCast, setCurrentAsset} from '../store/slice/castSlice';
 
 const castManager = new CastManager();
 
@@ -183,6 +183,8 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
     // Event handlers
     const onDisconnected = () => {
         dispatch({type: 'DISCONNECTED'});
+        // Clear Redux cast state when disconnected
+        reduxDispatch(clearCast());
     };
 
     const onConnected = (device: Device) => {
