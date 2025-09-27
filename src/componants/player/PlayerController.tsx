@@ -2,7 +2,7 @@ import * as React from 'react';
 import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {Card, IconButton, Portal, Text} from 'react-native-paper';
 import {initTranslate} from "../../localization/translate";
-import {Image, StyleSheet, View} from "react-native";
+import {Animated, Image, StyleSheet, TouchableOpacity, View} from "react-native";
 import {ThemeContext} from "../../contexts/theme-context";
 import {useSelector} from "react-redux";
 import {IRootState} from "../../screens/Main";
@@ -15,10 +15,16 @@ import {CastUtils} from "../../DLNACast/utils/CastUtils";
 interface PlayerControllerProps {
     visible: boolean;
     connectedDevice: Device | null;
-    onHeightChange?: (height: number) => void; // New callback for height changes
+    onHeightChange?: (height: number) => void; // Callback for height changes
+    compactMode?: boolean;
 }
 
-const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDevice, onHeightChange}) => {
+const PlayerController: React.FC<PlayerControllerProps> = ({
+                                                               visible,
+                                                               connectedDevice,
+                                                               onHeightChange,
+                                                               compactMode = false
+                                                           }) => {
     const {theme} = useContext(ThemeContext);
     const i18n = initTranslate();
     const cast = useSelector((state: IRootState) => state.cast);
@@ -32,9 +38,11 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     const [showVolumeControls, setShowVolumeControls] = useState(false);
     const [previousVolume, setPreviousVolume] = useState<number>(0.5);
 
-    // Refs for managing state
+    // Refs for managing state and animation
     const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const cardRef = useRef<View>(null);
+    const fadeAnim = useRef(new Animated.Value(1)).current;
+    const scaleAnim = useRef(new Animated.Value(1)).current;
 
     const styles = useStyles(theme);
 
@@ -101,7 +109,34 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
         } else {
             onHeightChange?.(0);
         }
-    }, [visible, asset, playbackState, handleCardLayout, onHeightChange]);
+    }, [visible, asset, playbackState, compactMode, handleCardLayout, onHeightChange]);
+
+    /**
+     * Animate smooth transition when compact mode changes
+     */
+    useEffect(() => {
+        const targetOpacity = compactMode ? 0.9 : 1;
+        const targetScale = compactMode ? 0.85 : 1;
+
+        // Run animations in parallel with separate native drivers
+        Animated.parallel([
+            Animated.timing(fadeAnim, {
+                toValue: targetOpacity,
+                duration: 250,
+                useNativeDriver: true, // Safe for opacity
+            }),
+            Animated.timing(scaleAnim, {
+                toValue: targetScale,
+                duration: 250,
+                useNativeDriver: true, // Safe for transform scale
+            })
+        ]).start(() => {
+            // Recalculate height after animation completes
+            setTimeout(() => {
+                handleCardLayout();
+            }, 50);
+        });
+    }, [compactMode, fadeAnim, scaleAnim, handleCardLayout]);
 
     /**
      * Get the display value for the slider - prioritize user action
@@ -244,6 +279,13 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
     }, [asset]);
 
     /**
+     * Check if current media supports play/pause (video or audio)
+     */
+    const supportsPlayPause = useCallback(() => {
+        return asset?.mediaType === 'video' || asset?.mediaType === 'audio';
+    }, [asset]);
+
+    /**
      * Handle mute toggle with fallback to volume control
      */
     const handleMuteToggle = useCallback(async () => {
@@ -289,165 +331,242 @@ const PlayerController: React.FC<PlayerControllerProps> = ({visible, connectedDe
 
     if (!visible) return null;
 
-    return (
-        <Portal>
-            <View style={styles.container}>
-                <Card
-                    style={styles.card}
-                    ref={cardRef}
-                    onLayout={handleCardLayout}
-                >
-                    {connectedDevice && (
-                        <View style={styles.titleContainer}>
-                            <View style={styles.title}>
-                                <Text style={styles.titleTop}>{connectedDevice.name}</Text>
-                                {asset?.filename && (
-                                    <Text style={styles.titleBottom}>{asset.filename}</Text>
-                                )}
-                            </View>
-                            {asset?.uri && (
-                                <Image
-                                    source={{uri: asset.uri}}
-                                    style={styles.thumbnail}
-                                    resizeMode="cover"
-                                />
-                            )}
-                            <IconButton
-                                icon="stop"
-                                size={24}
-                                onPress={handleStop}
-                                disabled={isLoading}
-                                style={styles.stopButton}
-                                iconColor={theme.colors.error}
-                            />
-                        </View>
-                    )}
-
-                    {asset ? (
-                        <View style={styles.controlsContainer}>
-                            {!isImageMedia() && (
-                                <>
-                                    <View style={styles.progressSection}>
-                                        <View style={styles.timeContainer}>
-                                            <Text style={styles.timeText}>
-                                                {formatTime(getSliderValue())}
-                                            </Text>
-                                            <Text style={styles.timeText}>
-                                                {formatTime(playbackState?.duration || 0)}
-                                            </Text>
-                                        </View>
-
-                                        <Slider
-                                            style={styles.progressSlider}
-                                            value={getSliderValue()}
-                                            onSlidingComplete={castManager.canSeek() ? handleSliderComplete : undefined}
-                                            onValueChange={castManager.canSeek() ? undefined : undefined}
-                                            minimumValue={0}
-                                            maximumValue={playbackState?.duration || 1000}
-                                            step={1}
-                                            minimumTrackTintColor={theme.colors.primary}
-                                            maximumTrackTintColor={theme.colors.outline}
-                                            thumbTintColor={castManager.canSeek() ? theme.colors.primary : theme.colors.outline}
-                                            disabled={isLoading || !playbackState || !castManager.canSeek()}
+    // Render compact mode
+    if (compactMode) {
+        return (
+            <Portal>
+                <View style={styles.container}>
+                    <Animated.View style={{
+                        opacity: fadeAnim,
+                        transform: [{scale: scaleAnim}]
+                    }}>
+                        <Card
+                            style={styles.compactCard}
+                            ref={cardRef}
+                            onLayout={handleCardLayout}
+                        >
+                            <View style={styles.compactContent}>
+                                {/* Media Image/Thumbnail or Device Icon */}
+                                <View style={styles.mediaImageContainer}>
+                                    {asset?.uri ? (
+                                        <Image
+                                            source={{uri: asset.uri}}
+                                            style={styles.mediaImage}
+                                            resizeMode="cover"
                                         />
-                                    </View>
-
-                                    <View style={styles.controlButtonsContainer}>
-                                        <IconButton
-                                            icon="skip-backward"
-                                            size={28}
-                                            disabled={isLoading || !castManager.canSeek()}
-                                            onPress={() => handleSeekTo(0)}
-                                            style={styles.controlButton}
-                                        />
-                                        <IconButton
-                                            icon="skip-previous"
-                                            size={28}
-                                            disabled={isLoading || !castManager.canSeek()}
-                                            onPress={() => handleSeekAdd(-10)}
-                                            style={styles.controlButton}
-                                        />
-                                        <IconButton
-                                            icon={isLoading ? "loading" : playIcon}
-                                            size={48}
-                                            disabled={isLoading}
-                                            onPress={handlePlayPause}
-                                            style={[styles.controlButton, styles.playButton]}
-                                        />
-                                        <IconButton
-                                            icon="skip-next"
-                                            size={28}
-                                            disabled={isLoading || !castManager.canSeek()}
-                                            onPress={() => handleSeekAdd(10)}
-                                            style={styles.controlButton}
-                                        />
-                                        <IconButton
-                                            icon="skip-forward"
-                                            size={28}
-                                            disabled={isLoading || !castManager.canSeek()}
-                                            onPress={() => handleSeekAdd(30)}
-                                            style={styles.controlButton}
-                                        />
-                                    </View>
-                                </>
-                            )}
-                            {playbackState && (
-                                <View style={styles.statusContainer}>
-                                    {!isImageMedia() && (
-                                        <View style={styles.volumeSection}>
+                                    ) : (
+                                        <View
+                                            style={[styles.mediaImagePlaceholder, {backgroundColor: theme.colors.outline}]}>
                                             <IconButton
-                                                icon={playbackState.muted || (playbackState.volume || 0) == 0 ? "volume-off" : "volume-high"}
+                                                icon={asset ? (asset.mediaType === 'audio' ? 'music' : 'image') : 'cast'}
                                                 size={20}
-                                                onPress={handleMuteToggle}
-                                                disabled={isLoading}
+                                                iconColor={theme.colors.onSurface}
                                             />
-                                            <View style={styles.volumeSliderContainer}>
-                                                <Slider
-                                                    style={styles.volumeSlider}
-                                                    value={CastUtils.volumeToPercentage(playbackState.volume || 0)}
-                                                    onSlidingComplete={(value) => handleVolumeChange(value)}
-                                                    minimumValue={0}
-                                                    maximumValue={100}
-                                                    step={5}
-                                                    minimumTrackTintColor={theme.colors.primary}
-                                                    maximumTrackTintColor={theme.colors.outline}
-                                                    thumbTintColor={theme.colors.primary}
-                                                    disabled={isLoading}
-                                                />
-                                            </View>
-                                            <Text style={styles.volumeText}>
-                                                {(playbackState.muted || (playbackState.volume || 0) === 0) ? 'Muted' : `${CastUtils.volumeToPercentage(playbackState.volume || 0)}%`}
-                                            </Text>
-                                        </View>
-                                    )}
-
-                                    {!castManager.canSeek() && !isImageMedia() && (
-                                        <Text style={styles.seekWarningText}>
-                                            Manual seeking not supported by this device
-                                        </Text>
-                                    )}
-
-                                    {isImageMedia() && (
-                                        <View style={styles.imageInfoContainer}>
-                                            <Text style={styles.imageInfoText}>
-                                                Image Display Mode
-                                            </Text>
-                                            <Text style={styles.imageInfoSubtext}>
-                                                Use device controls to navigate
-                                            </Text>
                                         </View>
                                     )}
                                 </View>
-                            )}
-                        </View>
-                    ) : (
-                        <View style={styles.placeholderContainer}>
-                            <Text style={styles.placeholderText}>
-                                {i18n.t('select_media')}
-                            </Text>
-                        </View>
-                    )}
-                </Card>
+
+                                {/* Media Title/Filename or Device Name */}
+                                <View style={styles.mediaTitleContainer}>
+                                    <Text
+                                        variant="bodyMedium"
+                                        numberOfLines={1}
+                                        ellipsizeMode="tail"
+                                        style={styles.compactMediaTitle}
+                                    >
+                                        {asset?.filename || connectedDevice?.name || 'No Device'}
+                                    </Text>
+                                </View>
+
+                                {/* Play/Pause Button (only for video/audio) */}
+                                {supportsPlayPause() && (
+                                    <TouchableOpacity
+                                        style={styles.playPauseButton}
+                                        onPress={handlePlayPause}
+                                        activeOpacity={0.7}
+                                        disabled={isLoading}
+                                    >
+                                        <IconButton
+                                            icon={isLoading ? "loading" : playIcon}
+                                            size={24}
+                                            iconColor={theme.colors.primary}
+                                            disabled={isLoading}
+                                        />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        </Card>
+                    </Animated.View>
+                </View>
+            </Portal>
+        );
+    }
+
+    // Render normal mode (your existing code)
+    return (
+        <Portal>
+            <View style={styles.container}>
+                <Animated.View style={{
+                    opacity: fadeAnim,
+                    transform: [{scale: scaleAnim}]
+                }}>
+                    <Card
+                        style={styles.card}
+                        ref={cardRef}
+                        onLayout={handleCardLayout}
+                    >
+                        {connectedDevice && (
+                            <View style={styles.titleContainer}>
+                                <View style={styles.title}>
+                                    <Text style={styles.titleTop}>{connectedDevice.name}</Text>
+                                    {asset?.filename && (
+                                        <Text style={styles.titleBottom}>{asset.filename}</Text>
+                                    )}
+                                </View>
+                                {asset?.uri && (
+                                    <Image
+                                        source={{uri: asset.uri}}
+                                        style={styles.thumbnail}
+                                        resizeMode="cover"
+                                    />
+                                )}
+                                <IconButton
+                                    icon="stop"
+                                    size={24}
+                                    onPress={handleStop}
+                                    disabled={isLoading}
+                                    style={styles.stopButton}
+                                    iconColor={theme.colors.error}
+                                />
+                            </View>
+                        )}
+
+                        {asset ? (
+                            <View style={styles.controlsContainer}>
+                                {!isImageMedia() && (
+                                    <>
+                                        <View style={styles.progressSection}>
+                                            <View style={styles.timeContainer}>
+                                                <Text style={styles.timeText}>
+                                                    {formatTime(getSliderValue())}
+                                                </Text>
+                                                <Text style={styles.timeText}>
+                                                    {formatTime(playbackState?.duration || 0)}
+                                                </Text>
+                                            </View>
+
+                                            <Slider
+                                                style={styles.progressSlider}
+                                                value={getSliderValue()}
+                                                onSlidingComplete={castManager.canSeek() ? handleSliderComplete : undefined}
+                                                onValueChange={castManager.canSeek() ? undefined : undefined}
+                                                minimumValue={0}
+                                                maximumValue={playbackState?.duration || 1000}
+                                                step={1}
+                                                minimumTrackTintColor={theme.colors.primary}
+                                                maximumTrackTintColor={theme.colors.outline}
+                                                thumbTintColor={castManager.canSeek() ? theme.colors.primary : theme.colors.outline}
+                                                disabled={isLoading || !playbackState || !castManager.canSeek()}
+                                            />
+                                        </View>
+
+                                        <View style={styles.controlButtonsContainer}>
+                                            <IconButton
+                                                icon="skip-backward"
+                                                size={28}
+                                                disabled={isLoading || !castManager.canSeek()}
+                                                onPress={() => handleSeekTo(0)}
+                                                style={styles.controlButton}
+                                            />
+                                            <IconButton
+                                                icon="skip-previous"
+                                                size={28}
+                                                disabled={isLoading || !castManager.canSeek()}
+                                                onPress={() => handleSeekAdd(-10)}
+                                                style={styles.controlButton}
+                                            />
+                                            <IconButton
+                                                icon={isLoading ? "loading" : playIcon}
+                                                size={48}
+                                                disabled={isLoading}
+                                                onPress={handlePlayPause}
+                                                style={[styles.controlButton, styles.playButton]}
+                                            />
+                                            <IconButton
+                                                icon="skip-next"
+                                                size={28}
+                                                disabled={isLoading || !castManager.canSeek()}
+                                                onPress={() => handleSeekAdd(10)}
+                                                style={styles.controlButton}
+                                            />
+                                            <IconButton
+                                                icon="skip-forward"
+                                                size={28}
+                                                disabled={isLoading || !castManager.canSeek()}
+                                                onPress={() => handleSeekAdd(30)}
+                                                style={styles.controlButton}
+                                            />
+                                        </View>
+                                    </>
+                                )}
+                                {playbackState && (
+                                    <View style={styles.statusContainer}>
+                                        {!isImageMedia() && (
+                                            <View style={styles.volumeSection}>
+                                                <IconButton
+                                                    icon={playbackState.muted || (playbackState.volume || 0) == 0 ? "volume-off" : "volume-high"}
+                                                    size={20}
+                                                    onPress={handleMuteToggle}
+                                                    disabled={isLoading}
+                                                />
+                                                <View style={styles.volumeSliderContainer}>
+                                                    <Slider
+                                                        style={styles.volumeSlider}
+                                                        value={CastUtils.volumeToPercentage(playbackState.volume || 0)}
+                                                        onSlidingComplete={(value) => handleVolumeChange(value)}
+                                                        minimumValue={0}
+                                                        maximumValue={100}
+                                                        step={5}
+                                                        minimumTrackTintColor={theme.colors.primary}
+                                                        maximumTrackTintColor={theme.colors.outline}
+                                                        thumbTintColor={theme.colors.primary}
+                                                        disabled={isLoading}
+                                                    />
+                                                </View>
+                                                <Text style={styles.volumeText}>
+                                                    {(playbackState.muted || (playbackState.volume || 0) === 0) ? 'Muted' : `${CastUtils.volumeToPercentage(playbackState.volume || 0)}%`}
+                                                </Text>
+                                            </View>
+                                        )}
+
+                                        {!castManager.canSeek() && !isImageMedia() && (
+                                            <Text style={styles.seekWarningText}>
+                                                Manual seeking not supported by this device
+                                            </Text>
+                                        )}
+
+                                        {isImageMedia() && (
+                                            <View style={styles.imageInfoContainer}>
+                                                <Text style={styles.imageInfoText}>
+                                                    Image Display Mode
+                                                </Text>
+                                                <Text style={styles.imageInfoSubtext}>
+                                                    Use device controls to navigate
+                                                </Text>
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+                            </View>
+                        ) : (
+                            <View style={styles.placeholderContainer}>
+                                <Text style={styles.placeholderText}>
+                                    {i18n.t('select_media')}
+                                </Text>
+                            </View>
+                        )}
+                    </Card>
+                </Animated.View>
             </View>
         </Portal>
     );
@@ -471,6 +590,54 @@ const useStyles = (theme: any) => StyleSheet.create({
         },
         shadowOpacity: 0.3,
         shadowRadius: 4.65,
+    },
+    compactCard: {
+        marginHorizontal: 16,
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        elevation: 8,
+        shadowColor: '#000',
+        shadowOffset: {
+            width: 0,
+            height: 4,
+        },
+        shadowOpacity: 0.3,
+        shadowRadius: 4.65,
+    },
+    compactContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        height: 60,
+    },
+    mediaImageContainer: {
+        width: 44,
+        height: 44,
+        marginRight: 12,
+    },
+    mediaImage: {
+        width: 44,
+        height: 44,
+        borderRadius: 4,
+    },
+    mediaImagePlaceholder: {
+        width: 44,
+        height: 44,
+        borderRadius: 4,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    mediaTitleContainer: {
+        flex: 1,
+        marginRight: 12,
+    },
+    compactMediaTitle: {
+        fontWeight: '500',
+    },
+    playPauseButton: {
+        width: 48,
+        height: 48,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     titleContainer: {
         flexDirection: 'row',

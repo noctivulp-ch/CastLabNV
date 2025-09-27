@@ -9,13 +9,14 @@ import {Album} from "expo-media-library";
 import AlbumItem from "../componants/items/AlbumItem";
 import {RootStackParamList} from "./Main";
 import {NativeStackScreenProps} from "@react-navigation/native-stack";
-
+import {useScrollDirection} from "../hooks/useScrollDirection";
 
 export type AlbumsProps = NativeStackScreenProps<RootStackParamList, "Albums"> & {
     playerHeight: number;
+    onScrollDirectionChange?: (isScrollingDown: boolean) => void;
 };
 
-const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
+const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight, onScrollDirectionChange}) => {
     const i18n = initTranslate();
     const [appIsReady, setAppIsReady] = useState(false);
     const dispatch = useDispatch()
@@ -24,6 +25,12 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
 
     // Media library permissions
     const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+
+    // Use the centralized scroll direction hook
+    const {handleScroll, resetScroll} = useScrollDirection({
+        onScrollDirectionChange,
+        threshold: 15 // Slightly higher threshold for albums screen
+    });
 
     /**
      * Fetch galleries/albums from MediaLibrary
@@ -60,12 +67,11 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
     // Initialize albums on component mount and when permissions change
     useEffect(() => {
         const initializeAlbums = async () => {
-
-
             if (permissionResponse?.status === 'granted') {
                 const albums = await fetchGalleries();
                 setAlbums(albums);
                 setAppIsReady(true);
+                resetScroll();
             } else if (permissionResponse?.status === 'denied') {
                 // Permission denied, show empty state or request again
                 setAlbums([]);
@@ -83,7 +89,7 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
         if (permissionResponse !== null) {
             initializeAlbums();
         }
-    }, [permissionResponse?.status]);
+    }, [permissionResponse?.status, resetScroll]);
 
     // Show loading indicator while initializing
     if (!appIsReady || permissionResponse === null) {
@@ -111,6 +117,8 @@ const AlbumsScreen: React.FC<AlbumsProps> = ({navigation, playerHeight}) => {
                     <AlbumItem album={item}/>
                 )}
                 keyExtractor={(item) => item.id}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
                 contentContainerStyle={[
                     styles.flatListContent,
                     {

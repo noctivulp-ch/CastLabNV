@@ -11,9 +11,11 @@ import {NativeStackScreenProps} from "@react-navigation/native-stack";
 import AssetItem from "../componants/items/AssetItem";
 import {addToAssets, setCurrentAsset} from "../store/slice/castSlice";
 import {DatePickerModal} from 'react-native-paper-dates';
+import {useScrollDirection} from "../hooks/useScrollDirection";
 
 export type AlbumProps = NativeStackScreenProps<RootStackParamList, "Album"> & {
     playerHeight: number;
+    onScrollDirectionChange?: (isScrollingDown: boolean) => void;
 };
 
 /**
@@ -24,7 +26,7 @@ interface DateRange {
     endDate: Date | undefined;
 }
 
-const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
+const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight, onScrollDirectionChange}) => {
     const i18n = initTranslate();
 
     // Extract navigation parameters
@@ -64,6 +66,12 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
     const [typeText, setTypeText] = useState<string>(i18n.t('all_media'));
     const [typeMenuVisible, setTypeMenuVisible] = useState<boolean>(false);
     const [sortByMenuVisible, setSortByMenuVisible] = useState<boolean>(false);
+
+    // Use the centralized scroll direction hook
+    const {handleScroll, resetScroll} = useScrollDirection({
+        onScrollDirectionChange,
+        threshold: 10 // Standard threshold for asset screen
+    });
 
     /**
      * Update sorting criteria whenever individual sort options change
@@ -127,8 +135,9 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
             setAsset(assetsPhoto.assets);
             setEndCursor(assetsPhoto.endCursor);
             setAlbumReady(true);
+            resetScroll();
         })();
-    }, [buildAssetsOptions]);
+    }, [buildAssetsOptions, resetScroll]);
 
     /**
      * Load more media assets when user reaches end of list
@@ -374,6 +383,8 @@ const AlbumScreen: React.FC<AlbumProps> = ({route, playerHeight}) => {
                 onEndReachedThreshold={0.1}
                 onEndReached={fetchMoreMedia}
                 keyExtractor={(item) => item.id}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
                 contentContainerStyle={[
                     styles.flatListContent,
                     {

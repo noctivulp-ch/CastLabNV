@@ -61,6 +61,7 @@ const Main: React.FC = () => {
     const [castDialogVisible, setCastDialogVisible] = useState(false);
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
+    const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
 
     // Player height management - tracks the actual height of the PlayerController
     const [playerHeight, setPlayerHeight] = useState<number>(0);
@@ -140,6 +141,15 @@ const Main: React.FC = () => {
             }
         })();
     }, [cast.currentAsset]);
+
+    /**
+     * Callback to handle scroll direction changes from screens
+     * This is called when user scrolls up/down in the media lists
+     * @param isScrollingDown - True when scrolling down, false when scrolling up
+     */
+    const handleScrollDirectionChange = useCallback((isScrollingDown: boolean) => {
+        setPlayerCompactMode(isScrollingDown);
+    }, []);
 
     /**
      * Callback to handle player height changes from PlayerController
@@ -344,7 +354,8 @@ const Main: React.FC = () => {
                         name="Albums"
                         options={{headerShown: true}}
                     >
-                        {(props) => <AlbumsScreen {...props} playerHeight={playerHeight}/>}
+                        {(props) => <AlbumsScreen {...props} playerHeight={playerHeight}
+                                                  onScrollDirectionChange={handleScrollDirectionChange}/>}
                     </Stack.Screen>
 
                     {/* Album screen with player height prop */}
@@ -352,7 +363,8 @@ const Main: React.FC = () => {
                         name="Album"
                         options={{headerShown: true}}
                     >
-                        {(props) => <AlbumScreen {...props} playerHeight={playerHeight}/>}
+                        {(props) => <AlbumScreen {...props} playerHeight={playerHeight}
+                                                 onScrollDirectionChange={handleScrollDirectionChange}/>}
                     </Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
@@ -382,6 +394,7 @@ const Main: React.FC = () => {
                 visible={playerVisible}
                 connectedDevice={connectedDevice}
                 onHeightChange={handlePlayerHeightChange}
+                compactMode={playerCompactMode}
             />
 
             {/* About dialog */}
