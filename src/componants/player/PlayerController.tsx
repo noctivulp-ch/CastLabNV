@@ -26,6 +26,7 @@ interface PlayerControllerProps {
     onHeightChange?: (height: number) => void;
     compactMode?: boolean;
     onLoadMoreAssets?: () => Promise<void>;
+    onToggleCompactMode?: () => void;
 }
 
 // Constants for AsyncStorage
@@ -36,7 +37,8 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                                                connectedDevice,
                                                                onHeightChange,
                                                                compactMode = false,
-                                                               onLoadMoreAssets
+                                                               onLoadMoreAssets,
+                                                               onToggleCompactMode
                                                            }) => {
     const {theme} = useContext(ThemeContext);
     const i18n = initTranslate();
@@ -141,7 +143,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     }, [asset]);
 
     /**
-     * Advance to next asset - FIXED VERSION
+     * Advance to next asset with loading support
      */
     const advanceToNext = useCallback(async () => {
 
@@ -149,7 +151,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
             return;
         }
 
-        // Set flag immediately
+        // Set flag immediately to prevent concurrent advances
         isAdvancingRef.current = true;
 
         try {
@@ -170,13 +172,14 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                 // Dispatch the nextAsset action
                 dispatch({type: 'cast/nextAsset'});
             } else {
+                // Disable autoplay when reaching the end
                 dispatch(setAutoplayEnabled(false));
                 await saveAutoplaySettings({...cast.autoplay, enabled: false});
             }
         } catch (error) {
             console.error('Autoplay advance error:', error);
         } finally {
-            // Reset flag after a longer delay
+            // Reset flag after a delay to prevent rapid successive calls
             setTimeout(() => {
                 isAdvancingRef.current = false;
             }, 3000);
@@ -184,7 +187,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     }, [cast.currentIndex, cast.assets.length, cast.autoplay, dispatch, onLoadMoreAssets, saveAutoplaySettings]);
 
     /**
-     * Start autoplay timer for images - SIMPLIFIED VERSION
+     * Start autoplay timer for images
      */
     const startImageAutoplay = useCallback(() => {
 
@@ -195,7 +198,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         // Clear any existing timer
         clearAutoplayTimer();
 
-
+        // Set new timer for autoplay
         autoplayTimerRef.current = setTimeout(() => {
             advanceToNext();
         }, cast.autoplay.delaySeconds * 1000);
@@ -219,6 +222,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         const duration = playbackState.duration || 0;
         const isPlaying = playbackState.isPlaying || false;
 
+        // Check if media is near end
         const isNearEnd = duration > 0 && currentPosition >= duration - 3;
         const positionStuck = Math.abs(currentPosition - lastProgressRef.current) < 0.1 && currentPosition > 0;
         const hasEnded = isNearEnd && (positionStuck || !isPlaying);
@@ -226,6 +230,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         if (hasEnded) {
             setMediaEndDetected(true);
 
+            // Advance to next with slight delay
             setTimeout(() => {
                 advanceToNext();
             }, 1500);
@@ -257,6 +262,13 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     }, [clearAutoplayTimer, advanceToNext]);
 
     /**
+     * Handle compact mode toggle
+     */
+    const handleToggleCompactMode = useCallback(() => {
+        onToggleCompactMode?.();
+    }, [onToggleCompactMode]);
+
+    /**
      * Handle card layout change to measure height
      */
     const handleCardLayout = useCallback(() => {
@@ -285,26 +297,22 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     // Update asset when cast state changes
     useEffect(() => {
         if (cast.currentAsset !== asset) {
-
             setAsset(cast.currentAsset);
             setUserSeekValue(null);
             setMediaEndDetected(false);
             clearAutoplayTimer();
             isAdvancingRef.current = false;
             lastProgressRef.current = 0;
-
         }
     }, [cast.currentAsset, asset, clearAutoplayTimer]);
 
-    // MAIN AUTOPLAY EFFECT - Handle autoplay when asset or settings change
+    // Handle autoplay when asset or settings change
     useEffect(() => {
-
         if (cast.currentAsset && cast.autoplay.enabled && isImageMedia(cast.currentAsset)) {
-
-            // Start timer with a small delay to ensure stable state
+            // Start timer with stabilization delay
             const stabilizationTimer = setTimeout(() => {
                 startImageAutoplay();
-            }, 1000); // 1 second stabilization
+            }, 1000);
 
             return () => {
                 clearTimeout(stabilizationTimer);
@@ -319,7 +327,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         }
     }, [playbackState?.position, playbackState?.isPlaying, checkForMediaEnd]);
 
-    // Listen for media cleared event to reset UI
+    // Listen for cast manager events
     useEffect(() => {
         const handleMediaCleared = () => {
             setAsset(null);
@@ -354,7 +362,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         }
     }, [playbackState?.isPlaying]);
 
-    // Measure height when visibility or content changes - debounced
+    // Measure height when visibility or content changes
     useEffect(() => {
         if (visible) {
             const timer = setTimeout(() => {
@@ -542,7 +550,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
             try {
                 await castManager.mute(!isMuted);
             } catch (muteError) {
-                // Ignore mute errors
+                // Ignore mute errors as some devices don't support it
             }
 
         } catch (error) {
@@ -558,7 +566,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     }, []);
 
     /**
-     * Handle autoplay setting changes with proper typing and menu refresh
+     * Handle autoplay setting changes with proper menu refresh
      */
     const handleAutoplayEnabledChange = useCallback(async (value: boolean) => {
         dispatch(setAutoplayEnabled(value));
@@ -617,79 +625,84 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                         opacity: fadeAnim,
                         transform: [{scale: scaleAnim}]
                     }}>
-                        <Card
-                            style={styles.compactCard}
-                            ref={cardRef}
-                            onLayout={handleCardLayout}
+                        <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={handleToggleCompactMode}
                         >
-                            <View style={styles.compactContent}>
-                                <View style={styles.mediaImageContainer}>
-                                    {asset?.uri ? (
-                                        <Image
-                                            source={{uri: asset.uri}}
-                                            style={styles.mediaImage}
-                                            resizeMode="cover"
-                                        />
-                                    ) : (
-                                        <View
-                                            style={[styles.mediaImagePlaceholder, {backgroundColor: theme.colors.outline}]}>
-                                            <IconButton
-                                                icon={asset ? (asset.mediaType === 'audio' ? 'music' : 'image') : 'cast'}
-                                                size={20}
-                                                iconColor={theme.colors.onSurface}
+                            <Card
+                                style={styles.compactCard}
+                                ref={cardRef}
+                                onLayout={handleCardLayout}
+                            >
+                                <View style={styles.compactContent}>
+                                    <View style={styles.mediaImageContainer}>
+                                        {asset?.uri ? (
+                                            <Image
+                                                source={{uri: asset.uri}}
+                                                style={styles.mediaImage}
+                                                resizeMode="cover"
                                             />
-                                        </View>
-                                    )}
-                                </View>
+                                        ) : (
+                                            <View
+                                                style={[styles.mediaImagePlaceholder, {backgroundColor: theme.colors.outline}]}>
+                                                <IconButton
+                                                    icon={asset ? (asset.mediaType === 'audio' ? 'music' : 'image') : 'cast'}
+                                                    size={20}
+                                                    iconColor={theme.colors.onSurface}
+                                                />
+                                            </View>
+                                        )}
+                                    </View>
 
-                                <View style={styles.mediaTitleContainer}>
-                                    <Text
-                                        variant="bodyMedium"
-                                        numberOfLines={1}
-                                        ellipsizeMode="tail"
-                                        style={styles.compactMediaTitle}
-                                    >
-                                        {asset?.filename || connectedDevice?.name || 'No Device'}
-                                    </Text>
-                                    {cast.autoplay.enabled && (
-                                        <Text variant="bodySmall"
-                                              style={[styles.autoplayIndicator, {color: theme.colors.primary}]}>
-                                            {isImageMedia() ? `${i18n.t('autoplay')} ${cast.autoplay.delaySeconds}s` : i18n.t('autoplay_indication')}
+                                    <View style={styles.mediaTitleContainer}>
+                                        <Text
+                                            variant="bodyMedium"
+                                            numberOfLines={1}
+                                            ellipsizeMode="tail"
+                                            style={styles.compactMediaTitle}
+                                        >
+                                            {asset?.filename || connectedDevice?.name || 'No Device'}
                                         </Text>
-                                    )}
-                                </View>
+                                        {cast.autoplay.enabled && (
+                                            <Text variant="bodySmall"
+                                                  style={[styles.autoplayIndicator, {color: theme.colors.primary}]}>
+                                                {isImageMedia() ? `${i18n.t('autoplay')} ${cast.autoplay.delaySeconds}s` : i18n.t('autoplay_indication')}
+                                            </Text>
+                                        )}
+                                    </View>
 
-                                {supportsPlayPause() && (
+                                    {supportsPlayPause() && (
+                                        <TouchableOpacity
+                                            style={styles.playPauseButton}
+                                            onPress={handlePlayPause}
+                                            activeOpacity={0.7}
+                                            disabled={isLoading}
+                                        >
+                                            <IconButton
+                                                icon={isLoading ? "loading" : playIcon}
+                                                size={24}
+                                                iconColor={theme.colors.primary}
+                                                disabled={isLoading}
+                                            />
+                                        </TouchableOpacity>
+                                    )}
+
                                     <TouchableOpacity
-                                        style={styles.playPauseButton}
-                                        onPress={handlePlayPause}
+                                        style={styles.nextButton}
+                                        onPress={handleNext}
                                         activeOpacity={0.7}
-                                        disabled={isLoading}
+                                        disabled={cast.currentIndex >= cast.assets.length - 1}
                                     >
                                         <IconButton
-                                            icon={isLoading ? "loading" : playIcon}
-                                            size={24}
-                                            iconColor={theme.colors.primary}
-                                            disabled={isLoading}
+                                            icon="skip-next"
+                                            size={20}
+                                            iconColor={cast.currentIndex >= cast.assets.length - 1 ? theme.colors.outline : theme.colors.onSurface}
+                                            disabled={cast.currentIndex >= cast.assets.length - 1}
                                         />
                                     </TouchableOpacity>
-                                )}
-
-                                <TouchableOpacity
-                                    style={styles.nextButton}
-                                    onPress={handleNext}
-                                    activeOpacity={0.7}
-                                    disabled={cast.currentIndex >= cast.assets.length - 1}
-                                >
-                                    <IconButton
-                                        icon="skip-next"
-                                        size={20}
-                                        iconColor={cast.currentIndex >= cast.assets.length - 1 ? theme.colors.outline : theme.colors.onSurface}
-                                        disabled={cast.currentIndex >= cast.assets.length - 1}
-                                    />
-                                </TouchableOpacity>
-                            </View>
-                        </Card>
+                                </View>
+                            </Card>
+                        </TouchableOpacity>
                     </Animated.View>
                 </View>
             </Portal>
@@ -730,85 +743,22 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                     />
                                 )}
 
-                                {/* Autoplay menu with key for forced re-render */}
-                                <Menu
-                                    key={menuKey}
-                                    visible={autoplayMenuVisible}
-                                    onDismiss={handleMenuDismiss}
-                                    anchor={
-                                        <IconButton
-                                            icon={cast.autoplay.enabled ? "play-circle" : "play-circle-outline"}
-                                            size={24}
-                                            onPress={handleMenuOpen}
-                                            iconColor={cast.autoplay.enabled ? theme.colors.primary : theme.colors.onSurface}
-                                        />
-                                    }
-                                >
-                                    <View style={styles.autoplayMenuContent}>
-                                        <View style={styles.autoplayMenuRow}>
-                                            <Text variant="bodyMedium">{i18n.t('autoplay')}</Text>
-                                            <Switch
-                                                value={cast.autoplay.enabled}
-                                                onValueChange={handleAutoplayEnabledChange}
-                                            />
-                                        </View>
-
-                                        {cast.autoplay.enabled && (
-                                            <>
-                                                <View style={styles.autoplayMenuRow}>
-                                                    <Text variant="bodySmall">{i18n.t('autoplay_indication')}</Text>
-                                                    <Switch
-                                                        value={cast.autoplay.onMediaEnd}
-                                                        onValueChange={handleAutoplayOnMediaEndChange}
-                                                    />
-                                                </View>
-
-                                                <View style={styles.autoplayDelaySection}>
-                                                    <Text
-                                                        variant="bodySmall">{i18n.t('pictures')} {i18n.t('duration')}: {cast.autoplay.delaySeconds}s</Text>
-                                                    <Slider
-                                                        style={styles.delaySlider}
-                                                        value={cast.autoplay.delaySeconds}
-                                                        onSlidingComplete={handleAutoplayDelayChange}
-                                                        minimumValue={1}
-                                                        maximumValue={30}
-                                                        step={1}
-                                                        minimumTrackTintColor={theme.colors.primary}
-                                                        maximumTrackTintColor={theme.colors.outline}
-                                                        thumbTintColor={theme.colors.primary}
-                                                    />
-                                                </View>
-
-                                                <View style={styles.resetButtonContainer}>
-                                                    <Button
-                                                        mode="text"
-                                                        onPress={resetAutoplaySettings}
-                                                        icon="refresh"
-                                                        style={styles.resetButton}
-                                                    >
-                                                        {i18n.t('reset')}
-                                                    </Button>
-                                                </View>
-                                            </>
-                                        )}
-                                    </View>
-                                </Menu>
-
+                                {/* Compact mode toggle button */}
                                 <IconButton
-                                    icon="stop"
+                                    icon="chevron-down"
                                     size={24}
-                                    onPress={handleStop}
-                                    disabled={isLoading}
-                                    style={styles.stopButton}
-                                    iconColor={theme.colors.error}
+                                    onPress={handleToggleCompactMode}
+                                    style={styles.compactToggleButton}
+                                    iconColor={theme.colors.onSurface}
                                 />
                             </View>
                         )}
 
                         {asset ? (
                             <View style={styles.controlsContainer}>
-                                {cast.assets.length > 1 && (
-                                    <View style={styles.navigationContainer}>
+                                {/* Show navigation/action buttons even if single asset for autoplay/stop */}
+                                <View style={styles.navigationContainer}>
+                                    {cast.assets.length > 1 && (
                                         <IconButton
                                             icon="skip-previous"
                                             size={32}
@@ -817,6 +767,83 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                             style={styles.navButton}
                                             iconColor={cast.currentIndex <= 0 ? theme.colors.outline : theme.colors.onSurface}
                                         />
+                                    )}
+
+                                    {/* Autoplay menu with key for forced re-render */}
+                                    <Menu
+                                        key={menuKey}
+                                        visible={autoplayMenuVisible}
+                                        onDismiss={handleMenuDismiss}
+                                        anchor={
+                                            <IconButton
+                                                icon={cast.autoplay.enabled ? "play-circle" : "play-circle-outline"}
+                                                size={32}
+                                                onPress={handleMenuOpen}
+                                                iconColor={cast.autoplay.enabled ? theme.colors.primary : theme.colors.onSurface}
+                                                style={styles.navButton}
+                                            />
+                                        }
+                                    >
+                                        <View style={styles.autoplayMenuContent}>
+                                            <View style={styles.autoplayMenuRow}>
+                                                <Text variant="bodyMedium">{i18n.t('autoplay')}</Text>
+                                                <Switch
+                                                    value={cast.autoplay.enabled}
+                                                    onValueChange={handleAutoplayEnabledChange}
+                                                />
+                                            </View>
+
+                                            {cast.autoplay.enabled && (
+                                                <>
+                                                    <View style={styles.autoplayMenuRow}>
+                                                        <Text variant="bodySmall">{i18n.t('autoplay_indication')}</Text>
+                                                        <Switch
+                                                            value={cast.autoplay.onMediaEnd}
+                                                            onValueChange={handleAutoplayOnMediaEndChange}
+                                                        />
+                                                    </View>
+
+                                                    <View style={styles.autoplayDelaySection}>
+                                                        <Text
+                                                            variant="bodySmall">{i18n.t('pictures')} {i18n.t('duration')}: {cast.autoplay.delaySeconds}s</Text>
+                                                        <Slider
+                                                            style={styles.delaySlider}
+                                                            value={cast.autoplay.delaySeconds}
+                                                            onSlidingComplete={handleAutoplayDelayChange}
+                                                            minimumValue={1}
+                                                            maximumValue={30}
+                                                            step={1}
+                                                            minimumTrackTintColor={theme.colors.primary}
+                                                            maximumTrackTintColor={theme.colors.outline}
+                                                            thumbTintColor={theme.colors.primary}
+                                                        />
+                                                    </View>
+
+                                                    <View style={styles.resetButtonContainer}>
+                                                        <Button
+                                                            mode="text"
+                                                            onPress={resetAutoplaySettings}
+                                                            icon="refresh"
+                                                            style={styles.resetButton}
+                                                        >
+                                                            {i18n.t('reset')}
+                                                        </Button>
+                                                    </View>
+                                                </>
+                                            )}
+                                        </View>
+                                    </Menu>
+
+                                    <IconButton
+                                        icon="stop"
+                                        size={32}
+                                        onPress={handleStop}
+                                        disabled={isLoading}
+                                        style={[styles.navButton, styles.stopButton]}
+                                        iconColor={theme.colors.error}
+                                    />
+
+                                    {cast.assets.length > 1 && (
                                         <IconButton
                                             icon="skip-next"
                                             size={32}
@@ -825,8 +852,8 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                             style={styles.navButton}
                                             iconColor={cast.currentIndex >= cast.assets.length - 1 ? theme.colors.outline : theme.colors.onSurface}
                                         />
-                                    </View>
-                                )}
+                                    )}
+                                </View>
 
                                 {!isImageMedia() && (
                                     <>
@@ -1069,6 +1096,10 @@ const useStyles = (theme: any) => StyleSheet.create({
         borderRadius: 8,
         marginRight: 8,
     },
+    compactToggleButton: {
+        margin: 0,
+        marginRight: 4,
+    },
     stopButton: {
         backgroundColor: theme.colors.errorContainer,
         margin: 0,
@@ -1104,6 +1135,7 @@ const useStyles = (theme: any) => StyleSheet.create({
     navigationContainer: {
         flexDirection: 'row',
         justifyContent: 'center',
+        alignItems: 'center',
         marginBottom: 16,
         gap: 20,
     },

@@ -80,8 +80,9 @@ const MainContent: React.FC = () => {
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
 
-    // Player height management and autoplay callback ref
+    // Player height management and manual compact mode state
     const [playerHeight, setPlayerHeight] = useState<number>(0);
+    const [manualCompactMode, setManualCompactMode] = useState<boolean>(false);
     const loadMoreAssetsRef = useRef<(() => Promise<void>) | null>(null);
 
     // Redux and database setup
@@ -100,12 +101,12 @@ const MainContent: React.FC = () => {
     // Initialize background notifications
     useBackgroundNotification();
 
-    // Load theme preference from storage
+    // Load theme preference from storage on initialization
     AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
         setTheme(value ? value : "auto");
     })
 
-    // Handle cast manager errors
+    // Handle cast manager errors with toast notifications
     useEffect(() => {
         if (error) {
             setToastText1(error);
@@ -203,15 +204,45 @@ const MainContent: React.FC = () => {
 
     /**
      * Callback to handle scroll direction changes from screens
-     * This is called when user scrolls up/down in the media lists
+     * Only applies automatic compact mode if not manually overridden
      */
     const handleScrollDirectionChange = useCallback((isScrollingDown: boolean) => {
-        setPlayerCompactMode(isScrollingDown);
+        // Only auto-set compact mode if not manually controlled
+        if (!manualCompactMode) {
+            setPlayerCompactMode(isScrollingDown);
+        }
+    }, [manualCompactMode]);
+
+    /**
+     * Handle manual toggle of compact mode
+     * Overrides automatic scroll-based compact mode behavior
+     */
+    const handleToggleCompactMode = useCallback(() => {
+        setManualCompactMode(prev => {
+            const newManualMode = !prev;
+            // Reset to normal mode when disabling manual control
+            if (!newManualMode) {
+                setPlayerCompactMode(false);
+            } else {
+                // Enable compact mode when taking manual control
+                setPlayerCompactMode(true);
+            }
+            return newManualMode;
+        });
     }, []);
 
     /**
+     * Reset manual compact mode state when player becomes invisible
+     */
+    useEffect(() => {
+        if (!playerVisible) {
+            setManualCompactMode(false);
+            setPlayerCompactMode(false);
+        }
+    }, [playerVisible]);
+
+    /**
      * Callback to handle player height changes from PlayerController
-     * This is called whenever the PlayerController's height changes
      */
     const handlePlayerHeightChange = useCallback((height: number) => {
         setPlayerHeight(height);
@@ -295,7 +326,7 @@ const MainContent: React.FC = () => {
         setThemeDialogVisible(true);
     }
 
-    // Keep device awake when connected for autoplay
+    // Keep device awake when connected for autoplay functionality
     useEffect(() => {
         if (connectedDevice) {
             activateKeepAwakeAsync();
@@ -311,7 +342,7 @@ const MainContent: React.FC = () => {
         const startServers = async () => {
             const currentServer = serverRef.current;
 
-            // Stop servers if connectedDevice is null
+            // Stop servers if no device connected
             if (!connectedDevice) {
                 try {
                     if (currentServer) {
@@ -330,7 +361,7 @@ const MainContent: React.FC = () => {
 
                 console.log(`Main: Starting media server on ${ip}:${SERVER_PORT}`);
 
-                // DLNA server configuration
+                // DLNA server configuration with proper headers
                 const extraConfig = `server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
@@ -458,7 +489,7 @@ const MainContent: React.FC = () => {
                         {(props) => {
                             const albumsRef = useRef<AlbumsScreenRef>(null);
 
-                            // Update the ref when screen mounts
+                            // Update the ref when screen mounts for autoplay support
                             useEffect(() => {
                                 if (albumsRef.current?.loadMoreAssets) {
                                     loadMoreAssetsRef.current = albumsRef.current.loadMoreAssets;
@@ -489,7 +520,7 @@ const MainContent: React.FC = () => {
                         {(props) => {
                             const albumRef = useRef<AlbumScreenRef>(null);
 
-                            // Update the ref when screen mounts
+                            // Update the ref when screen mounts for autoplay support
                             useEffect(() => {
                                 if (albumRef.current?.loadMoreAssets) {
                                     loadMoreAssetsRef.current = albumRef.current.loadMoreAssets;
@@ -534,13 +565,14 @@ const MainContent: React.FC = () => {
                 onToastHide={() => setToastVisible(false)}
             />
 
-            {/* Enhanced Player controller with autoplay support */}
+            {/* Enhanced Player controller with toggle compact mode support */}
             <PlayerController
                 visible={playerVisible}
                 connectedDevice={connectedDevice}
                 onHeightChange={handlePlayerHeightChange}
                 compactMode={playerCompactMode}
                 onLoadMoreAssets={handleLoadMoreAssets}
+                onToggleCompactMode={handleToggleCompactMode}
             />
 
             {/* About dialog with enhanced information */}
