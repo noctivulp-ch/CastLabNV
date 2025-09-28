@@ -1,15 +1,19 @@
-import {createSlice, PayloadAction} from "@reduxjs/toolkit";
-import {Asset} from "expo-media-library";
+import {createSlice, PayloadAction} from '@reduxjs/toolkit';
+import {Asset} from 'expo-media-library';
+import PlayList from '../../entities/PlayList';
 
 type Cast = {
-    currentAsset: Asset | null,
-    assets: Asset[],
-    currentIndex: number,
+    currentAsset: Asset | null;
+    assets: Asset[];
+    currentIndex: number;
     autoplay: {
         enabled: boolean;
         delaySeconds: number; // Delay for images (default: 5 seconds)
         onMediaEnd: boolean;  // Auto-advance when video/audio ends
     };
+    // Playlist support
+    currentPlaylist: PlayList | null;
+    isPlaylistMode: boolean;
 };
 
 const initialState: Cast = {
@@ -21,6 +25,8 @@ const initialState: Cast = {
         delaySeconds: 5,
         onMediaEnd: true,
     },
+    currentPlaylist: null,
+    isPlaylistMode: false,
 };
 
 export const castSlice = createSlice({
@@ -68,7 +74,7 @@ export const castSlice = createSlice({
         },
 
         /**
-         * Add assets to the playlist (fixed logic from original)
+         * Add assets to the playlist
          */
         addToAssets(state, action: PayloadAction<Asset | Asset[]>) {
             const payload = action.payload;
@@ -93,7 +99,7 @@ export const castSlice = createSlice({
         },
 
         /**
-         * Remove assets from the playlist (keeping your original logic)
+         * Remove assets from the playlist
          */
         removeFromAsset(state, action: PayloadAction<Asset | Asset[]>) {
             const payload = action.payload;
@@ -168,7 +174,7 @@ export const castSlice = createSlice({
          * Set autoplay delay for images in seconds
          */
         setAutoplayDelay: (state, action: PayloadAction<number>) => {
-            state.autoplay.delaySeconds = Math.max(1, Math.min(60, action.payload)); // 1-60 seconds
+            state.autoplay.delaySeconds = Math.max(1, Math.min(60, action.payload));
         },
 
         /**
@@ -192,6 +198,40 @@ export const castSlice = createSlice({
             state.currentAsset = null;
             state.assets = [];
             state.currentIndex = -1;
+            // Clear playlist data
+            state.currentPlaylist = null;
+            state.isPlaylistMode = false;
+        },
+
+        // New playlist reducers
+        setPlaylist: (state, action: PayloadAction<{
+            playlist: PlayList;
+            assets: Asset[];
+            currentIndex?: number;
+        }>) => {
+            state.currentPlaylist = action.payload.playlist;
+            state.assets = action.payload.assets;
+            state.currentIndex = action.payload.currentIndex || 0;
+            state.currentAsset = action.payload.assets[action.payload.currentIndex || 0] || null;
+            state.isPlaylistMode = true;
+        },
+
+        clearPlaylist: (state) => {
+            state.currentPlaylist = null;
+            state.isPlaylistMode = false;
+        },
+
+        updatePlaylistAssets: (state, action: PayloadAction<Asset[]>) => {
+            if (state.currentPlaylist && state.currentPlaylist.assets) {
+                state.currentPlaylist.assets = action.payload;
+                state.assets = action.payload;
+
+                if (state.currentIndex >= action.payload.length) {
+                    state.currentIndex = Math.max(0, action.payload.length - 1);
+                }
+
+                state.currentAsset = state.assets[state.currentIndex] || null;
+            }
         },
     },
 });
@@ -209,6 +249,9 @@ export const {
     setAutoplayOnMediaEnd,
     updateAutoplaySettings,
     clearCast,
+    setPlaylist,
+    clearPlaylist,
+    updatePlaylistAssets,
 } = castSlice.actions;
 
 export default castSlice.reducer;

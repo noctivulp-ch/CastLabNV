@@ -1,5 +1,5 @@
 import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-native-paper";
-import {NavigationContainer} from "@react-navigation/native";
+import {NavigationContainer, NavigationProp} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
@@ -33,6 +33,9 @@ import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
 import castReducer from "../store/slice/castSlice";
+import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
+import PlaylistEditScreen from "../screens/PlaylistEditScreen";
+import MediaSelectorScreen from "../screens/MediaSelectorScreen";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -56,6 +59,20 @@ export type IRootState = ReturnType<typeof rootReducer>;
 export type RootStackParamList = {
     Albums: { playerHeight?: number };
     Album: { album: Album, videoOnly: boolean, playerHeight?: number };
+    Playlists: { playerHeight?: number };
+    PlaylistEdit: {
+        playlist: {
+            id?: number;
+            name?: string;
+            assets?: any[];
+        };
+        isNew?: boolean;
+    };
+    MediaSelector: {
+        onSelectAssets: (assets: Asset[]) => void;
+        excludeAssets?: Asset[];
+        allowMultiple?: boolean;
+    };
     PictureAlbums: any;
     VideoAlbums: any;
 }
@@ -300,6 +317,13 @@ const MainContent: React.FC = () => {
     };
 
     /**
+     * Handle playlists button press - navigate to playlists screen
+     */
+    const handlePlaylistsPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
+        navigation.navigate('Playlists', {});
+    }, []);
+
+    /**
      * Delete all files from the server directory
      */
     const deleteFiles = async () => {
@@ -468,18 +492,19 @@ const MainContent: React.FC = () => {
             <NavigationContainer theme={statusBarTheme}>
                 <Stack.Navigator
                     initialRouteName="Albums"
-                    screenOptions={{
+                    screenOptions={({navigation}) => ({
                         headerShown: true,
                         gestureEnabled: true,
                         title: i18n.t('albums'),
                         header: (props) => <CustomAppBar
                             {...props}
                             onButtonCastPressed={buttonCastPressed}
+                            onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             castManager={castManager}
                             infoPress={displayAppInfo}
                             themePressed={displayThemePicker}
                         />,
-                    }}
+                    })}
                 >
                     {/* Albums screen with player height prop */}
                     <Stack.Screen
@@ -542,6 +567,72 @@ const MainContent: React.FC = () => {
                             );
                         }}
                     </Stack.Screen>
+
+                    {/* Playlists screen */}
+                    <Stack.Screen
+                        name="Playlists"
+                        options={{
+                            headerShown: true,
+                            title: i18n.t('playlists'),
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                        }}
+                    >
+                        {(props) => {
+                            const playlistsRef = useRef<PlaylistsScreenRef>(null);
+
+                            useEffect(() => {
+                                if (playlistsRef.current?.refreshPlaylists) {
+                                    loadMoreAssetsRef.current = playlistsRef.current.refreshPlaylists;
+                                }
+                                return () => {
+                                    loadMoreAssetsRef.current = null;
+                                };
+                            }, []);
+
+                            return (
+                                <PlaylistsScreen
+                                    ref={playlistsRef}
+                                    playerHeight={playerHeight}
+                                    onScrollDirectionChange={handleScrollDirectionChange}
+                                />
+                            );
+                        }}
+                    </Stack.Screen>
+
+                    {/* Playlist edit screen */}
+                    <Stack.Screen
+                        name="PlaylistEdit"
+                        options={({route}) => ({
+                            headerShown: true,
+                            title: route.params?.playlist?.name || i18n.t('edit_playlist'),
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                        })}
+                        component={PlaylistEditScreen}
+                    />
+
+                    {/* Media selector screen */}
+                    <Stack.Screen
+                        name="MediaSelector"
+                        options={{
+                            headerShown: true,
+                            title: '',
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                            presentation: 'modal',
+                        }}
+                        component={MediaSelectorScreen}
+                    />
                 </Stack.Navigator>
             </NavigationContainer>
 
