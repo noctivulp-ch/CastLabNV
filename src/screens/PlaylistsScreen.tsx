@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {Animated, FlatList, StyleSheet, TouchableOpacity, View,} from 'react-native';
+import {Animated, FlatList, Image, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
     Button,
     Card,
@@ -10,6 +10,7 @@ import {
     IconButton,
     Menu,
     Portal,
+    Surface,
     Text,
     TextInput,
     useTheme,
@@ -101,36 +102,6 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
         }, [onScrollDirectionChange]);
 
         /**
-         * Create serializable playlist data for navigation
-         */
-        const createSerializablePlaylist = useCallback((playlist: PlayList) => {
-            // Ensure playlist has all required properties
-            if (!playlist) {
-                console.error('createSerializablePlaylist: playlist is undefined');
-                return {
-                    id: undefined,
-                    name: 'Untitled Playlist',
-                    assets: []
-                };
-            }
-
-            return {
-                id: playlist.id || undefined,
-                name: playlist.name || 'Untitled Playlist',
-                assets: (playlist.assets || []).map(asset => ({
-                    id: asset.id,
-                    filename: asset.filename,
-                    uri: asset.uri,
-                    mediaType: asset.mediaType,
-                    duration: asset.duration,
-                    width: asset.width,
-                    height: asset.height,
-                    albumId: asset.albumId,
-                }))
-            };
-        }, []);
-
-        /**
          * Handle playlist creation
          */
         const handleCreatePlaylist = useCallback(async () => {
@@ -202,7 +173,6 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
             }
 
             if (!playlist.assets || playlist.assets.length === 0) {
-                // Use a simple alert here since we're not in a Dialog context
                 alert(`${i18n.t('empty_playlist')}\n${i18n.t('empty_playlist_message')}`);
                 return;
             }
@@ -218,7 +188,7 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
         }, [dispatch, i18n]);
 
         /**
-         * Navigate to playlist edit with serializable data
+         * Navigate to playlist edit
          */
         const navigateToPlaylistEdit = useCallback((playlist: PlayList) => {
             if (!playlist) {
@@ -232,13 +202,27 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
             } catch (error) {
                 console.error('Failed to navigate to PlaylistEdit:', error);
             }
-        }, [navigation, createSerializablePlaylist]);
+        }, [navigation]);
+
+        /**
+         * Get media type icon
+         */
+        const getMediaIcon = useCallback((asset: Asset) => {
+            switch (asset.mediaType) {
+                case 'video':
+                    return 'video';
+                case 'audio':
+                    return 'music';
+                case 'photo':
+                default:
+                    return 'image';
+            }
+        }, []);
 
         /**
          * Render individual playlist item
          */
         const renderPlaylistItem = useCallback(({item}: { item: PlayList }) => {
-            // Safety check for item
             if (!item) {
                 console.error('renderPlaylistItem: item is undefined');
                 return null;
@@ -246,6 +230,7 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
 
             const assetCount = item.assets?.length || 0;
             const hasAssets = assetCount > 0;
+            const previewAssets = item.assets?.slice(0, 4) || [];
 
             return (
                 <Card style={styles.playlistCard}>
@@ -324,22 +309,40 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
                                 </View>
                             </View>
 
-                            {/* Preview of first few assets */}
-                            {hasAssets && item.assets && (
+                            {/* Thumbnail preview grid */}
+                            {hasAssets && (
                                 <View style={styles.previewContainer}>
                                     <Text variant="bodySmall" style={styles.previewLabel}>
                                         {i18n.t('preview')}:
                                     </Text>
-                                    <Text
-                                        variant="bodySmall"
-                                        numberOfLines={2}
-                                        style={styles.previewText}
-                                    >
-                                        {item.assets.slice(0, 3)
-                                            .map((asset: Asset) => asset?.filename || 'Unknown')
-                                            .join(', ')}
-                                        {assetCount > 3 && '...'}
-                                    </Text>
+                                    <View style={styles.thumbnailGrid}>
+                                        {previewAssets.map((asset: Asset, index: number) => (
+                                            <View key={asset.id || index} style={styles.thumbnailWrapper}>
+                                                {asset.uri ? (
+                                                    <Image
+                                                        source={{uri: asset.uri}}
+                                                        style={styles.thumbnail}
+                                                        resizeMode="cover"
+                                                    />
+                                                ) : (
+                                                    <Surface style={styles.thumbnailPlaceholder}>
+                                                        <IconButton
+                                                            icon={getMediaIcon(asset)}
+                                                            size={20}
+                                                            iconColor={theme.colors.onSurfaceVariant}
+                                                        />
+                                                    </Surface>
+                                                )}
+                                            </View>
+                                        ))}
+                                        {assetCount > 4 && (
+                                            <View style={styles.moreIndicator}>
+                                                <Text variant="bodySmall" style={styles.moreText}>
+                                                    +{assetCount - 4}
+                                                </Text>
+                                            </View>
+                                        )}
+                                    </View>
                                 </View>
                             )}
                         </View>
@@ -355,6 +358,7 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
             handlePlayPlaylist,
             handleDeletePlaylist,
             navigateToPlaylistEdit,
+            getMediaIcon,
             styles,
         ]);
 
@@ -395,9 +399,9 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
         return (
             <View style={styles.container}>
                 <FlatList
-                    data={playlists || []} // Ensure data is never undefined
+                    data={playlists || []}
                     renderItem={renderPlaylistItem}
-                    keyExtractor={(item, index) => item?.id?.toString() || `playlist-${index}`} // Fallback key
+                    keyExtractor={(item, index) => item?.id?.toString() || `playlist-${index}`}
                     contentContainerStyle={[
                         styles.listContainer,
                         {paddingBottom: playerHeight + 20},
@@ -411,8 +415,8 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
                     showsVerticalScrollIndicator={false}
                 />
 
-                {/* Floating Action Button */}
-                {fabVisible && (
+                {/* Floating Action Button - only show when playlists exist */}
+                {fabVisible && playlists.length > 0 && (
                     <FAB
                         icon="plus"
                         style={[styles.fab, {bottom: Math.max(insets.bottom, 16) + 16}]}
@@ -542,12 +546,42 @@ const useStyles = (theme: any) =>
         },
         previewLabel: {
             fontWeight: '500',
-            marginBottom: 4,
+            marginBottom: 8,
             color: theme.colors.onSurfaceVariant,
         },
-        previewText: {
+        thumbnailGrid: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 6,
+        },
+        thumbnailWrapper: {
+            width: 60,
+            height: 60,
+            borderRadius: 8,
+            overflow: 'hidden',
+        },
+        thumbnail: {
+            width: '100%',
+            height: '100%',
+        },
+        thumbnailPlaceholder: {
+            width: '100%',
+            height: '100%',
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: theme.colors.surfaceVariant,
+        },
+        moreIndicator: {
+            width: 60,
+            height: 60,
+            borderRadius: 8,
+            backgroundColor: theme.colors.surfaceVariant,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        moreText: {
+            fontWeight: 'bold',
             color: theme.colors.onSurfaceVariant,
-            fontStyle: 'italic',
         },
         fab: {
             position: 'absolute',

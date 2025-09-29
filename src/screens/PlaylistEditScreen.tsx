@@ -64,6 +64,9 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
     const [errorMessage, setErrorMessage] = useState('');
     const [playlistLoaded, setPlaylistLoaded] = useState(false);
     const [showSavedMessage, setShowSavedMessage] = useState(false);
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
+    const [deleteConfirmDialogVisible, setDeleteConfirmDialogVisible] = useState(false);
 
     // Ref to track if component is mounted
     const isMountedRef = useRef(true);
@@ -99,18 +102,23 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
 
             if (isMountedRef.current) {
                 setHasChanges(false);
+
+                // Show "Saved" message
                 setShowSavedMessage(true);
 
+                // Clear existing timer if any
                 if (savedMessageTimerRef.current) {
                     clearTimeout(savedMessageTimerRef.current);
                 }
 
+                // Hide message after 2 seconds
                 savedMessageTimerRef.current = setTimeout(() => {
                     if (isMountedRef.current) {
                         setShowSavedMessage(false);
                     }
                 }, 2000);
 
+                // Call the callback to refresh playlists list
                 if (onPlaylistSaved) {
                     onPlaylistSaved();
                 }
@@ -224,6 +232,66 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
     }, []);
 
     /**
+     * Toggle selection mode
+     */
+    const toggleSelectionMode = useCallback(() => {
+        setSelectionMode(prev => !prev);
+        setSelectedAssets(new Set());
+    }, []);
+
+    /**
+     * Toggle asset selection in bulk mode
+     */
+    const toggleAssetSelection = useCallback((assetId: string) => {
+        setSelectedAssets(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(assetId)) {
+                newSet.delete(assetId);
+            } else {
+                newSet.add(assetId);
+            }
+            return newSet;
+        });
+    }, []);
+
+    /**
+     * Select all assets
+     */
+    const selectAllAssets = useCallback(() => {
+        const allIds = new Set(playlist.assets?.map(asset => asset.id) || []);
+        setSelectedAssets(allIds);
+    }, [playlist.assets]);
+
+    /**
+     * Deselect all assets
+     */
+    const deselectAllAssets = useCallback(() => {
+        setSelectedAssets(new Set());
+    }, []);
+
+    /**
+     * Show delete confirmation dialog for selected assets
+     */
+    const handleBulkDeleteConfirm = useCallback(() => {
+        if (selectedAssets.size === 0) return;
+        setDeleteConfirmDialogVisible(true);
+    }, [selectedAssets]);
+
+    /**
+     * Delete selected assets
+     */
+    const handleBulkDelete = useCallback(() => {
+        setPlaylist(prev => ({
+            ...prev,
+            assets: prev.assets?.filter(asset => !selectedAssets.has(asset.id)) || [],
+        }));
+        setHasChanges(true);
+        setSelectedAssets(new Set());
+        setSelectionMode(false);
+        setDeleteConfirmDialogVisible(false);
+    }, [selectedAssets]);
+
+    /**
      * Handle drag end - update playlist with new order
      */
     const handleDragEnd = useCallback(({data}: { data: Asset[] }) => {
@@ -289,85 +357,115 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
         const safeFilename = item.filename || 'Unknown';
         const safeMediaType = item.mediaType || 'photo';
         const safeDuration = item.duration;
+        const isSelected = selectedAssets.has(item.id);
 
         return (
             <ScaleDecorator>
-                <Card style={[styles.assetCard, isActive && styles.assetCardActive]}>
-                    <View style={styles.assetContent}>
-                        <TouchableOpacity
-                            onLongPress={drag}
-                            disabled={isActive}
-                            style={styles.dragHandle}
-                        >
-                            <IconButton
-                                icon="drag"
-                                size={20}
-                                iconColor={theme.colors.onSurfaceVariant}
-                            />
-                        </TouchableOpacity>
-
-                        <View style={styles.assetThumbnail}>
-                            {item.uri ? (
-                                <Image
-                                    source={{uri: item.uri}}
-                                    style={styles.thumbnailImage}
-                                    resizeMode="cover"
-                                />
-                            ) : (
-                                <Surface style={styles.thumbnailPlaceholder}>
+                <Card style={[
+                    styles.assetCard,
+                    isActive && styles.assetCardActive,
+                    isSelected && styles.assetCardSelected
+                ]}>
+                    <TouchableOpacity
+                        onPress={() => selectionMode && toggleAssetSelection(item.id)}
+                        disabled={!selectionMode}
+                        activeOpacity={selectionMode ? 0.7 : 1}
+                    >
+                        <View style={styles.assetContent}>
+                            {/* Selection checkbox in selection mode */}
+                            {selectionMode && (
+                                <View style={styles.selectionCheckbox}>
                                     <IconButton
-                                        icon={getMediaIcon(item)}
+                                        icon={isSelected ? "checkbox-marked" : "checkbox-blank-outline"}
                                         size={24}
+                                        iconColor={isSelected ? theme.colors.primary : theme.colors.onSurfaceVariant}
+                                    />
+                                </View>
+                            )}
+
+                            {/* Drag handle - only in normal mode */}
+                            {!selectionMode && (
+                                <TouchableOpacity
+                                    onLongPress={drag}
+                                    disabled={isActive}
+                                    style={styles.dragHandle}
+                                >
+                                    <IconButton
+                                        icon="drag"
+                                        size={20}
                                         iconColor={theme.colors.onSurfaceVariant}
                                     />
-                                </Surface>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Asset thumbnail */}
+                            <View style={styles.assetThumbnail}>
+                                {item.uri ? (
+                                    <Image
+                                        source={{uri: item.uri}}
+                                        style={styles.thumbnailImage}
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <Surface style={styles.thumbnailPlaceholder}>
+                                        <IconButton
+                                            icon={getMediaIcon(item)}
+                                            size={24}
+                                            iconColor={theme.colors.onSurfaceVariant}
+                                        />
+                                    </Surface>
+                                )}
+                            </View>
+
+                            {/* Asset info */}
+                            <View style={styles.assetInfo}>
+                                <Text variant="bodyMedium" numberOfLines={1}>
+                                    {safeFilename}
+                                </Text>
+                                <View style={styles.assetMeta}>
+                                    <Chip
+                                        mode="outlined"
+                                        compact
+                                        icon={getMediaIcon(item)}
+                                        style={styles.typeChip}
+                                        textStyle={styles.chipTextStyle}
+                                    >
+                                        {safeMediaType}
+                                    </Chip>
+                                    {safeDuration ? (
+                                        <Text variant="bodySmall" style={styles.duration}>
+                                            {formatDuration(safeDuration)}
+                                        </Text>
+                                    ) : null}
+                                </View>
+                            </View>
+
+                            {/* Asset actions - only in normal mode */}
+                            {!selectionMode && (
+                                <Menu
+                                    visible={assetMenuVisible && selectedAsset?.id === item.id}
+                                    onDismiss={() => setAssetMenuVisible(false)}
+                                    anchor={
+                                        <IconButton
+                                            icon="dots-vertical"
+                                            size={20}
+                                            onPress={() => {
+                                                setSelectedAsset(item);
+                                                setAssetMenuVisible(true);
+                                            }}
+                                        />
+                                    }
+                                >
+                                    <Menu.Item
+                                        onPress={() => handleRemoveAsset(item)}
+                                        title={i18n.t('remove')}
+                                        leadingIcon="delete"
+                                        titleStyle={{color: theme.colors.error}}
+                                    />
+                                </Menu>
                             )}
                         </View>
-
-                        <View style={styles.assetInfo}>
-                            <Text variant="bodyMedium" numberOfLines={1}>
-                                {safeFilename}
-                            </Text>
-                            <View style={styles.assetMeta}>
-                                <Chip
-                                    mode="outlined"
-                                    compact
-                                    icon={getMediaIcon(item)}
-                                    style={styles.typeChip}
-                                    textStyle={styles.chipTextStyle}
-                                >
-                                    {safeMediaType}
-                                </Chip>
-                                {safeDuration ? (
-                                    <Text variant="bodySmall" style={styles.duration}>
-                                        {formatDuration(safeDuration)}
-                                    </Text>
-                                ) : null}
-                            </View>
-                        </View>
-
-                        <Menu
-                            visible={assetMenuVisible && selectedAsset?.id === item.id}
-                            onDismiss={() => setAssetMenuVisible(false)}
-                            anchor={
-                                <IconButton
-                                    icon="dots-vertical"
-                                    size={20}
-                                    onPress={() => {
-                                        setSelectedAsset(item);
-                                        setAssetMenuVisible(true);
-                                    }}
-                                />
-                            }
-                        >
-                            <Menu.Item
-                                onPress={() => handleRemoveAsset(item)}
-                                title={i18n.t('remove')}
-                                leadingIcon="delete"
-                                titleStyle={{color: theme.colors.error}}
-                            />
-                        </Menu>
-                    </View>
+                    </TouchableOpacity>
                 </Card>
             </ScaleDecorator>
         );
@@ -380,6 +478,9 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
         formatDuration,
         i18n,
         styles,
+        selectionMode,
+        selectedAssets,
+        toggleAssetSelection,
     ]);
 
     /**
@@ -454,33 +555,81 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                 </Surface>
             )}
 
+            {/* Playlist Stats */}
             <Surface style={styles.statsContainer}>
                 <View style={styles.statsRow}>
                     <Text variant="headlineSmall">
                         {playlist.name || i18n.t('untitled_playlist')}
                     </Text>
-                    <IconButton
-                        icon="pencil"
-                        onPress={() => {
-                            setNewName(playlist.name || '');
-                            setEditNameDialogVisible(true);
-                        }}
-                    />
+                    <View style={styles.headerActions}>
+                        {/* Selection mode toggle */}
+                        {playlist.assets && playlist.assets.length > 0 && (
+                            <IconButton
+                                icon={selectionMode ? "close" : "checkbox-multiple-marked"}
+                                onPress={toggleSelectionMode}
+                                iconColor={selectionMode ? theme.colors.error : theme.colors.onSurface}
+                            />
+                        )}
+                        <IconButton
+                            icon="pencil"
+                            onPress={() => {
+                                setNewName(playlist.name || '');
+                                setEditNameDialogVisible(true);
+                            }}
+                        />
+                    </View>
                 </View>
-                <View style={styles.statsRow}>
-                    <Text variant="bodyMedium">
-                        {playlist.assets?.length === 0 ? i18n.t('empty') :
-                            playlist.assets?.length === 1 ? `${playlist.assets?.length} ${i18n.t('item')}` :
-                                `${playlist.assets?.length || 0} ${i18n.t('items')}`}
-                    </Text>
-                    {totalDuration > 0 && (
+
+                {/* Selection mode toolbar */}
+                {selectionMode && (
+                    <View style={styles.selectionToolbar}>
+                        <View style={styles.selectionInfo}>
+                            <Text variant="bodyMedium">
+                                {selectedAssets.size === 0
+                                    ? i18n.t('select_items')
+                                    : i18n.t('selected_count', {count: selectedAssets.size})}
+                            </Text>
+                        </View>
+                        <View style={styles.selectionActions}>
+                            <Button
+                                mode="text"
+                                onPress={selectedAssets.size === playlist.assets?.length ? deselectAllAssets : selectAllAssets}
+                                compact
+                            >
+                                {selectedAssets.size === playlist.assets?.length ? i18n.t('deselect_all') : i18n.t('select_all')}
+                            </Button>
+                            <Button
+                                mode="contained"
+                                onPress={handleBulkDeleteConfirm}
+                                disabled={selectedAssets.size === 0}
+                                buttonColor={theme.colors.error}
+                                textColor={theme.colors.onError}
+                                icon="delete"
+                                compact
+                            >
+                                {i18n.t('delete')}
+                            </Button>
+                        </View>
+                    </View>
+                )}
+
+                {!selectionMode && (
+                    <View style={styles.statsRow}>
                         <Text variant="bodyMedium">
-                            {i18n.t('total_duration')}: {formatDuration(totalDuration)}
+                            {playlist.assets?.length === 0 ? i18n.t('empty') :
+                                playlist.assets?.length === 1 ? `${playlist.assets?.length} ${i18n.t('item')}` :
+                                    `${playlist.assets?.length || 0} ${i18n.t('items')}`}
                         </Text>
-                    )}
-                </View>
+                        {totalDuration > 0 && (
+                            <Text variant="bodyMedium">
+                                {i18n.t('total_duration')}: {formatDuration(totalDuration)}
+                            </Text>
+                        )}
+                    </View>
+                )}
             </Surface>
 
+            {/* Assets List with Drag and Drop */}
             {playlist.assets && playlist.assets.length > 0 ? (
                 <DraggableFlatList
                     data={playlist.assets}
@@ -489,12 +638,14 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                     onDragEnd={handleDragEnd}
                     containerStyle={styles.listContainer}
                     contentContainerStyle={styles.assetsList}
+                    activationDistance={selectionMode ? 999999 : 10}
                 />
             ) : (
                 renderEmptyState()
             )}
 
-            {playlist.assets && playlist.assets.length > 0 &&
+            {/* Add Media FAB */}
+            {playlist.assets && playlist.assets.length > 0 && !selectionMode &&
                 <FAB
                     icon="plus"
                     style={[styles.fab, {bottom: Math.max(insets.bottom, 16) + 16}]}
@@ -502,6 +653,7 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                     label={i18n.t('add_media')}
                 />}
 
+            {/* Edit Name Dialog */}
             <Portal>
                 <Dialog
                     visible={editNameDialogVisible}
@@ -532,6 +684,35 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                 </Dialog>
             </Portal>
 
+            {/* Bulk Delete Confirmation Dialog */}
+            <Portal>
+                <Dialog
+                    visible={deleteConfirmDialogVisible}
+                    onDismiss={() => setDeleteConfirmDialogVisible(false)}
+                >
+                    <Dialog.Icon icon="delete-alert"/>
+                    <Dialog.Title>{i18n.t('delete_selected_items')}</Dialog.Title>
+                    <Dialog.Content>
+                        <Text variant="bodyMedium">
+                            {i18n.t('delete_selected_items_confirmation', {count: selectedAssets.size})}
+                        </Text>
+                    </Dialog.Content>
+                    <Dialog.Actions>
+                        <Button onPress={() => setDeleteConfirmDialogVisible(false)}>
+                            {i18n.t('cancel')}
+                        </Button>
+                        <Button
+                            onPress={handleBulkDelete}
+                            buttonColor={theme.colors.error}
+                            textColor={theme.colors.onError}
+                        >
+                            {i18n.t('delete')}
+                        </Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
+
+            {/* Error Dialog */}
             <Portal>
                 <Dialog
                     visible={errorDialogVisible}
@@ -609,6 +790,26 @@ const useStyles = (theme: any) =>
             justifyContent: 'space-between',
             alignItems: 'center',
         },
+        headerActions: {
+            flexDirection: 'row',
+            alignItems: 'center',
+        },
+        selectionToolbar: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: 12,
+            paddingTop: 12,
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.outline,
+        },
+        selectionInfo: {
+            flex: 1,
+        },
+        selectionActions: {
+            flexDirection: 'row',
+            gap: 8,
+        },
         listContainer: {
             flex: 1,
         },
@@ -624,12 +825,20 @@ const useStyles = (theme: any) =>
             elevation: 8,
             opacity: 0.9,
         },
+        assetCardSelected: {
+            borderWidth: 2,
+            borderColor: theme.colors.primary,
+            backgroundColor: theme.colors.primaryContainer,
+        },
         assetContent: {
             flexDirection: 'row',
             alignItems: 'center',
             padding: 8,
         },
         dragHandle: {
+            marginRight: 8,
+        },
+        selectionCheckbox: {
             marginRight: 8,
         },
         assetThumbnail: {

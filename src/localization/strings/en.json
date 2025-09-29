@@ -159,5 +159,10 @@
   "unknown_album": "Unknown Album",
   "invalid_date": "Invalid Date",
   "untitled_playlist": "Untitled Playlist",
-  "saved": "Saved"
+  "saved": "Saved",
+  "select_items": "Select items",
+  "select_all": "Select all",
+  "deselect_all": "Deselect all",
+  "delete_selected_items": "Delete selected items",
+  "delete_selected_items_confirmation": "Are you sure you want to delete {{count}} selected item(s)?"
 }
