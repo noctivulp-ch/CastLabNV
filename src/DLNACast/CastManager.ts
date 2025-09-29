@@ -247,8 +247,11 @@ export class CastManager extends EventEmitter {
      */
     async castMedia(mediaInfo: MediaInfo): Promise<void> {
         if (!this.currentDevice) {
+            // Emit error only once by stopping any background tasks first
+            this.stopHeartbeat();
+            this.stopPolling();
             this.emit('error', this.i18n.t('error.noDevice'));
-            return;
+            throw new Error(this.i18n.t('error.noDevice'));
         }
 
         // Validate media info
@@ -407,7 +410,10 @@ export class CastManager extends EventEmitter {
      */
     async getStatus(): Promise<PlaybackState> {
         if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
+            // Stop background tasks silently
+            this.stopHeartbeat();
+            this.stopPolling();
+            // Return default state without emitting error (polling will handle it)
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
 
@@ -944,6 +950,14 @@ ${body}
      * @returns A promise resolving to the playback state.
      */
     private async dlnaGetStatus(): Promise<PlaybackState> {
+        // Check device before doing anything
+        if (!this.currentDevice) {
+            // Stop heartbeat if it's running without a device
+            this.stopHeartbeat();
+            this.stopPolling();
+            // Return default state without emitting error
+            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
+        }
         try {
             // Don't cache position info - we need real-time data
             // Also don't cache volume/mute during active volume changes
@@ -1043,6 +1057,10 @@ ${body}
 
         const poll = async () => {
             try {
+                if (!this.currentDevice) {
+                    this.stopPolling();
+                    return;
+                }
                 if (!await this.checkNetworkAndDevice()) {
                     this.disconnect();
                     return;
@@ -1056,8 +1074,11 @@ ${body}
                 console.warn('Polling error:', err);
             }
 
-            // Always schedule next poll with consistent interval
-            this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
+            // Only schedule next poll if polling interval still exists
+            // (it will be null if stopPolling() was called)
+            if (this.pollingInterval !== null) {
+                this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
+            }
         };
 
         // Start first poll immediately

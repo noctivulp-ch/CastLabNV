@@ -14,7 +14,7 @@ import {initTranslate} from "../localization/translate";
 import {Album, Asset} from "expo-media-library";
 import AlbumScreen, {AlbumScreenRef} from "./AlbumScreen";
 import {Device} from '../DLNACast/types/Device';
-import {Provider as ReduxProvider, useSelector} from "react-redux";
+import {Provider as ReduxProvider, useDispatch, useSelector} from "react-redux";
 import CastDevicesPopup from "../componants/popup/CastDevicesPopup";
 import {SERVER_PORT} from "../constants/Values";
 import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
@@ -32,7 +32,7 @@ import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
-import castReducer from "../store/slice/castSlice";
+import castReducer, {setCurrentAsset} from "../store/slice/castSlice";
 import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
 import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
@@ -95,7 +95,7 @@ const MainContent: React.FC = () => {
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
-
+    const dispatch = useDispatch();
     // Player height management and manual compact mode state
     const [playerHeight, setPlayerHeight] = useState<number>(0);
     const [manualCompactMode, setManualCompactMode] = useState<boolean>(false);
@@ -198,11 +198,15 @@ const MainContent: React.FC = () => {
 
                     } catch (castError) {
                         console.error('Main: Failed to cast media:', castError);
-
+                        // Clear the asset from Redux to prevent re-triggering
+                        dispatch(setCurrentAsset(null));
                         // Show error toast for casting failures
-                        setToastText1(i18n.t('failed_to_cast_media'));
-                        setToastText2((castError as Error).message || i18n.t('unknown_error'));
-                        setToastVisible(true);
+                        const errorMessage = (castError as Error).message;
+                        if (!errorMessage.includes('No device connected')) {
+                            setToastText1(i18n.t('failed_to_cast_media'));
+                            setToastText2(errorMessage || i18n.t('unknown_error'));
+                            setToastVisible(true);
+                        }
                     }
                 }
             }
