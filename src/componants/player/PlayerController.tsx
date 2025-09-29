@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useCallback, useContext, useEffect, useRef, useState} from 'react';
-import {Button, Card, IconButton, Menu, Portal, Switch, Text} from 'react-native-paper';
+import {Button, Card, Dialog, IconButton, Portal, Switch, Text} from 'react-native-paper';
 import {initTranslate} from "../../localization/translate";
 import {Animated, Image, StyleSheet, TouchableOpacity, View} from "react-native";
 import {ThemeContext} from "../../contexts/theme-context";
@@ -336,6 +336,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
             clearAutoplayTimer();
             setMediaEndDetected(false);
             isAdvancingRef.current = false;
+            dispatch({type: 'cast/clearCast'});
         };
 
         const handleCastingStopped = () => {
@@ -504,6 +505,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
             clearAutoplayTimer();
             isAdvancingRef.current = false;
             await castManager.stop();
+
         } catch (error) {
             console.error('Stop failed:', error);
         } finally {
@@ -768,72 +770,80 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                             iconColor={cast.currentIndex <= 0 ? theme.colors.outline : theme.colors.onSurface}
                                         />
                                     )}
-
-                                    {/* Autoplay menu with key for forced re-render */}
-                                    <Menu
-                                        key={menuKey}
-                                        visible={autoplayMenuVisible}
-                                        onDismiss={handleMenuDismiss}
-                                        anchor={
-                                            <IconButton
-                                                icon={cast.autoplay.enabled ? "play-circle" : "play-circle-outline"}
-                                                size={32}
-                                                onPress={handleMenuOpen}
-                                                iconColor={cast.autoplay.enabled ? theme.colors.primary : theme.colors.onSurface}
-                                                style={styles.navButton}
-                                            />
-                                        }
-                                    >
-                                        <View style={styles.autoplayMenuContent}>
-                                            <View style={styles.autoplayMenuRow}>
-                                                <Text variant="bodyMedium">{i18n.t('autoplay')}</Text>
-                                                <Switch
-                                                    value={cast.autoplay.enabled}
-                                                    onValueChange={handleAutoplayEnabledChange}
-                                                />
-                                            </View>
-
-                                            {cast.autoplay.enabled && (
-                                                <>
+                                    {/* Autoplay button */}
+                                    <IconButton
+                                        icon={cast.autoplay.enabled ? "play-circle" : "play-circle-outline"}
+                                        size={32}
+                                        onPress={() => setAutoplayMenuVisible(true)}
+                                        iconColor={cast.autoplay.enabled ? theme.colors.primary : theme.colors.onSurface}
+                                        style={styles.navButton}
+                                    />
+                                    {/* Autoplay Dialog */}
+                                    <Portal>
+                                        <Dialog
+                                            visible={autoplayMenuVisible}
+                                            onDismiss={handleMenuDismiss}
+                                        >
+                                            <Dialog.Title>{i18n.t('autoplay')}</Dialog.Title>
+                                            <Dialog.Content>
+                                                <View style={styles.autoplayDialogContent}>
                                                     <View style={styles.autoplayMenuRow}>
-                                                        <Text variant="bodySmall">{i18n.t('autoplay_indication')}</Text>
+                                                        <Text variant="bodyMedium">{i18n.t('autoplay')}</Text>
                                                         <Switch
-                                                            value={cast.autoplay.onMediaEnd}
-                                                            onValueChange={handleAutoplayOnMediaEndChange}
+                                                            value={cast.autoplay.enabled}
+                                                            onValueChange={handleAutoplayEnabledChange}
                                                         />
                                                     </View>
 
-                                                    <View style={styles.autoplayDelaySection}>
-                                                        <Text
-                                                            variant="bodySmall">{i18n.t('pictures')} {i18n.t('duration')}: {cast.autoplay.delaySeconds}s</Text>
-                                                        <Slider
-                                                            style={styles.delaySlider}
-                                                            value={cast.autoplay.delaySeconds}
-                                                            onSlidingComplete={handleAutoplayDelayChange}
-                                                            minimumValue={1}
-                                                            maximumValue={30}
-                                                            step={1}
-                                                            minimumTrackTintColor={theme.colors.primary}
-                                                            maximumTrackTintColor={theme.colors.outline}
-                                                            thumbTintColor={theme.colors.primary}
-                                                        />
-                                                    </View>
+                                                    {cast.autoplay.enabled ? (
+                                                        <>
+                                                            <View style={styles.autoplayMenuRow}>
+                                                                <Text
+                                                                    variant="bodySmall">{i18n.t('autoplay_indication')}</Text>
+                                                                <Switch
+                                                                    value={cast.autoplay.onMediaEnd}
+                                                                    onValueChange={handleAutoplayOnMediaEndChange}
+                                                                />
+                                                            </View>
 
-                                                    <View style={styles.resetButtonContainer}>
-                                                        <Button
-                                                            mode="text"
-                                                            onPress={resetAutoplaySettings}
-                                                            icon="refresh"
-                                                            style={styles.resetButton}
-                                                        >
-                                                            {i18n.t('reset')}
-                                                        </Button>
-                                                    </View>
-                                                </>
-                                            )}
-                                        </View>
-                                    </Menu>
+                                                            <View style={styles.autoplayDelaySection}>
+                                                                <Text variant="bodySmall">
+                                                                    {i18n.t('pictures')} {i18n.t('duration')}: {cast.autoplay.delaySeconds}s
+                                                                </Text>
+                                                                <Slider
+                                                                    style={styles.delaySlider}
+                                                                    value={cast.autoplay.delaySeconds}
+                                                                    onSlidingComplete={handleAutoplayDelayChange}
+                                                                    minimumValue={1}
+                                                                    maximumValue={30}
+                                                                    step={1}
+                                                                    minimumTrackTintColor={theme.colors.primary}
+                                                                    maximumTrackTintColor={theme.colors.outline}
+                                                                    thumbTintColor={theme.colors.primary}
+                                                                />
+                                                            </View>
 
+                                                            <View style={styles.resetButtonContainer}>
+                                                                <Button
+                                                                    mode="text"
+                                                                    onPress={resetAutoplaySettings}
+                                                                    icon="refresh"
+                                                                    style={styles.resetButton}
+                                                                >
+                                                                    {i18n.t('reset')}
+                                                                </Button>
+                                                            </View>
+                                                        </>
+                                                    ) : null}
+                                                </View>
+                                            </Dialog.Content>
+                                            <Dialog.Actions>
+                                                <Button onPress={handleMenuDismiss}>
+                                                    {i18n.t('close')}
+                                                </Button>
+                                            </Dialog.Actions>
+                                        </Dialog>
+                                    </Portal>
                                     <IconButton
                                         icon="stop"
                                         size={32}
@@ -1104,9 +1114,14 @@ const useStyles = (theme: any) => StyleSheet.create({
         backgroundColor: theme.colors.errorContainer,
         margin: 0,
     },
+    autoplayMenu: {
+        maxHeight: 400,
+        marginBottom: 8,
+    },
     autoplayMenuContent: {
         padding: 16,
         minWidth: 280,
+        maxWidth: 320,
     },
     autoplayMenuRow: {
         flexDirection: 'row',
@@ -1224,6 +1239,9 @@ const useStyles = (theme: any) => StyleSheet.create({
         fontSize: 16,
         color: theme.colors.onSurfaceVariant,
         textAlign: 'center',
+    },
+    autoplayDialogContent: {
+        paddingVertical: 8,
     },
 });
 

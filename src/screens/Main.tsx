@@ -1,6 +1,6 @@
 import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-native-paper";
 import {NavigationContainer, NavigationProp} from "@react-navigation/native";
-import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
+import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
 import {combineReducers, configureStore} from "@reduxjs/toolkit";
@@ -76,11 +76,12 @@ export type RootStackParamList = {
 }
 
 const isIOS = Platform.OS === 'ios';
-
+const expo = SQLite.openDatabaseSync('db.db');
+const db = drizzle(expo);
 const MainContent: React.FC = () => {
     const {setTheme, theme, statusBarTheme, type: themeType} = useContext(ThemeContext);
     const Stack = createNativeStackNavigator<RootStackParamList>();
-    const i18n = initTranslate();
+    const i18n = useMemo(() => initTranslate(), []);
 
     // UI state management
     const [alertVisible, setAlertVisible] = useState<boolean>(false);
@@ -105,8 +106,7 @@ const MainContent: React.FC = () => {
 
     // Redux and database setup
     const cast = useSelector((state: IRootState) => state.cast);
-    const expo = SQLite.openDatabaseSync('db.db');
-    const db = drizzle(expo);
+
     const {success} = useMigrations(db, migrations);
 
     // Cast management
@@ -477,7 +477,7 @@ const MainContent: React.FC = () => {
                 await Promise.all(stopPromises);
             })();
         };
-    }, [connectedDevice, i18n]);
+    }, [connectedDevice]);
 
     // App initialization effect
     useEffect(() => {
