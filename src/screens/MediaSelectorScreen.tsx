@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Dimensions, FlatList, Image, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
     ActivityIndicator,
@@ -76,7 +76,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     const [loadingMore, setLoadingMore] = useState(false);
     const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
     const [playlistLoaded, setPlaylistLoaded] = useState(false);
-
+    const isConfirmingRef = useRef(false);
     // Sorting state
     const [sortModificationTimeAsc, setSortModificationTimeAsc] = useState<SortByValue>([SortBy.modificationTime, false]);
     const [sortDuration, setSortDuration] = useState<SortByValue | undefined>(undefined);
@@ -288,6 +288,11 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
      */
     useEffect(() => {
         const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+            // Allow navigation if confirming selection
+            console.log('beforeRemove', isConfirmingRef.current);
+            if (isConfirmingRef.current) {
+                return;
+            }
             if (viewMode === 'assets') {
                 // Prevent default behavior of leaving the screen
                 e.preventDefault();
@@ -378,7 +383,8 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
      * Confirm selection and navigate back
      */
     const handleConfirmSelection = useCallback(() => {
-
+        // Set ref immediately (synchronous)
+        isConfirmingRef.current = true;
         if (onSelectAssets && typeof onSelectAssets === 'function') {
             try {
                 onSelectAssets(selectedAssets);
