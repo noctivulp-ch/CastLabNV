@@ -158,5 +158,6 @@
   "autoplay_feature_highlight": "New: Automatic media progression with customizable timing and smart loading",
   "unknown_album": "Unknown Album",
   "invalid_date": "Invalid Date",
-  "untitled_playlist": "Untitled Playlist"
+  "untitled_playlist": "Untitled Playlist",
+  "saved": "Saved"
 }

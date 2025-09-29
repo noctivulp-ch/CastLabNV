@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Image, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
     ActivityIndicator,
@@ -54,21 +54,29 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
     const {playlistId, isNew} = route.params || {playlistId: -1, isNew: false};
 
     const [playlist, setPlaylist] = useState<PlayList>(new PlayList());
-
     const [editNameDialogVisible, setEditNameDialogVisible] = useState(false);
     const [newName, setNewName] = useState(playlist?.name || '');
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(isNew);
     const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
     const [assetMenuVisible, setAssetMenuVisible] = useState(false);
-    const [unsavedChangesDialogVisible, setUnsavedChangesDialogVisible] = useState(false);
-    const [successDialogVisible, setSuccessDialogVisible] = useState(false);
     const [errorDialogVisible, setErrorDialogVisible] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
-    const [isNavigatingAway, setIsNavigatingAway] = useState(false);
     const [playlistLoaded, setPlaylistLoaded] = useState(false);
+    const [showSavedMessage, setShowSavedMessage] = useState(false);
+
+    // Ref to track if component is mounted
+    const isMountedRef = useRef(true);
+    // Debounced auto-save timer
+    const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+    // Timer ref for hiding the saved message
+    const savedMessageTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const styles = useStyles(theme);
+
+    /**
+     * Load playlist from database
+     */
     useEffect(() => {
         (async () => {
             const initialPlaylist = await getPlayList(playlistId);
@@ -77,76 +85,116 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
             }
             setPlaylistLoaded(true);
         })();
-    }, []);
+    }, [playlistId]);
+
     /**
-     * Save playlist to database
+     * Auto-save function with debouncing
      */
-    const savePlaylist = useCallback(async () => {
-        if (!hasChanges || !playlist) return;
+    const autoSave = useCallback(async (playlistToSave: PlayList) => {
+        if (!playlistToSave || !isMountedRef.current || !playlistToSave.id) return;
+
         try {
             setSaving(true);
-            await insertOrUpdatePlayList(playlist);
-            setHasChanges(false);
+            await insertOrUpdatePlayList(playlistToSave);
 
-            // Call the callback to refresh playlists list
-            if (onPlaylistSaved) {
-                onPlaylistSaved();
+            if (isMountedRef.current) {
+                setHasChanges(false);
+                setShowSavedMessage(true);
+
+                if (savedMessageTimerRef.current) {
+                    clearTimeout(savedMessageTimerRef.current);
+                }
+
+                savedMessageTimerRef.current = setTimeout(() => {
+                    if (isMountedRef.current) {
+                        setShowSavedMessage(false);
+                    }
+                }, 2000);
+
+                if (onPlaylistSaved) {
+                    onPlaylistSaved();
+                }
             }
-
-            return true; // Indicate success
         } catch (error) {
-            console.error('Failed to save playlist:', error);
-            setErrorMessage(i18n.t('failed_to_save_playlist'));
-            setErrorDialogVisible(true);
-            return false; // Indicate failure
+            console.error('PlaylistEdit: Auto-save failed:', error);
+            if (isMountedRef.current) {
+                setErrorMessage(i18n.t('failed_to_save_playlist'));
+                setErrorDialogVisible(true);
+            }
         } finally {
-            setSaving(false);
+            if (isMountedRef.current) {
+                setSaving(false);
+            }
         }
-    }, [playlist, hasChanges, i18n, onPlaylistSaved]);
+    }, [onPlaylistSaved, i18n]);
 
     /**
-     * Handle back navigation with unsaved changes
+     * Trigger debounced auto-save when playlist changes
      */
-    const handleBackPress = useCallback(() => {
-        if (hasChanges) {
-            setUnsavedChangesDialogVisible(true);
-        } else {
-            navigation.goBack();
+    useEffect(() => {
+        // Don't auto-save if no changes or playlist not loaded yet
+        if (!hasChanges || !playlist.id || !playlistLoaded) {
+            return;
         }
-    }, [hasChanges, navigation]);
+
+        // Clear existing timer
+        if (autoSaveTimerRef.current) {
+            clearTimeout(autoSaveTimerRef.current);
+        }
+
+        // Set new timer for auto-save (1 second debounce)
+        autoSaveTimerRef.current = setTimeout(() => {
+            autoSave(playlist);
+        }, 1000);
+
+        // Cleanup
+        return () => {
+            if (autoSaveTimerRef.current) {
+                clearTimeout(autoSaveTimerRef.current);
+            }
+        };
+    }, [playlist, hasChanges, playlistLoaded, autoSave]);
 
     /**
-     * Discard changes and go back
+     * Cleanup on unmount
      */
-    const discardChangesAndGoBack = useCallback(() => {
-        setUnsavedChangesDialogVisible(false);
-        setIsNavigatingAway(true);
-        setHasChanges(false);
-        // Use setTimeout to ensure state updates before navigation
-        setTimeout(() => {
-            navigation.goBack();
-        }, 0);
-    }, [navigation]);
+    useEffect(() => {
+        isMountedRef.current = true;
+
+        return () => {
+            isMountedRef.current = false;
+            if (autoSaveTimerRef.current) {
+                clearTimeout(autoSaveTimerRef.current);
+            }
+            if (savedMessageTimerRef.current) {
+                clearTimeout(savedMessageTimerRef.current);
+            }
+        };
+    }, []);
 
     /**
-     * Save changes and go back
+     * Override back button behavior - save before leaving if needed
      */
-    const saveChangesAndGoBack = useCallback(async () => {
-        setUnsavedChangesDialogVisible(false);
-        setIsNavigatingAway(true);
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove', async (e: any) => {
+            // If there are pending changes, save them before leaving
+            if (hasChanges && autoSaveTimerRef.current) {
+                e.preventDefault();
 
-        const success = await savePlaylist();
+                // Clear timer and save immediately
+                if (autoSaveTimerRef.current) {
+                    clearTimeout(autoSaveTimerRef.current);
+                }
 
-        if (success) {
-            setHasChanges(false);
-            // Use setTimeout to ensure state updates before navigation
-            setTimeout(() => {
-                navigation.goBack();
-            }, 0);
-        } else {
-            setIsNavigatingAway(false);
-        }
-    }, [savePlaylist, navigation]);
+                await autoSave(playlist);
+
+                // Now allow navigation
+                navigation.dispatch(e.data.action);
+            }
+        });
+
+        return unsubscribe;
+    }, [navigation, hasChanges, playlist, autoSave]);
 
     /**
      * Update playlist name
@@ -162,16 +210,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
         }
         setEditNameDialogVisible(false);
     }, [newName, playlist.name]);
-
-    /**
-     * Save playlist manually (from FAB or menu)
-     */
-    const handleManualSave = useCallback(async () => {
-        const success = await savePlaylist();
-        if (success) {
-            setSuccessDialogVisible(true);
-        }
-    }, [savePlaylist]);
 
     /**
      * Remove asset from playlist
@@ -196,48 +234,28 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
         setHasChanges(true);
     }, []);
 
-    const assetsSelected = (data: Asset[]) => {
+    /**
+     * Assets selected from MediaSelector
+     */
+    const assetsSelected = useCallback((data: Asset[]) => {
         setPlaylist(prev => ({
             ...prev,
             assets: [...(prev.assets ?? []), ...data]
         }));
         setHasChanges(true);
-    }
+    }, []);
 
     /**
-     * Navigate to media selector with callback
+     * Navigate to media selector
      */
     const handleAddMedia = useCallback(() => {
-
-        // Store the callback in a temporary variable accessible by MediaSelector
-        (global as any).mediaSelector_onSelectAssets = (selectedAssets: Asset[]) => {
-
-            // Ensure assets have all required properties
-            const validatedAssets = selectedAssets.map(asset => ({
-                id: asset.id || `temp-${Math.random()}`,
-                filename: asset.filename || 'Unknown',
-                uri: asset.uri || '',
-                mediaType: asset.mediaType || 'photo',
-                duration: asset.duration,
-                width: asset.width,
-                height: asset.height,
-                albumId: asset.albumId,
-            })) as Asset[];
-
-            setPlaylist(prev => ({
-                ...prev,
-                assets: [...(prev.assets || []), ...validatedAssets],
-            }));
-            setHasChanges(true);
-        };
-
         (navigation as any).navigate('MediaSelector', {
             onSelectAssets: assetsSelected,
             allowMultiple: true,
             playlistName: playlist.name,
             playlistId: playlistId
         });
-    }, [navigation, playlist.assets, playlist.name]);
+    }, [navigation, playlist.name, playlistId, assetsSelected]);
 
     /**
      * Format duration for display
@@ -276,7 +294,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
             <ScaleDecorator>
                 <Card style={[styles.assetCard, isActive && styles.assetCardActive]}>
                     <View style={styles.assetContent}>
-                        {/* Drag handle */}
                         <TouchableOpacity
                             onLongPress={drag}
                             disabled={isActive}
@@ -289,7 +306,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                             />
                         </TouchableOpacity>
 
-                        {/* Asset thumbnail */}
                         <View style={styles.assetThumbnail}>
                             {item.uri ? (
                                 <Image
@@ -308,7 +324,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                             )}
                         </View>
 
-                        {/* Asset info */}
                         <View style={styles.assetInfo}>
                             <Text variant="bodyMedium" numberOfLines={1}>
                                 {safeFilename}
@@ -331,7 +346,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                             </View>
                         </View>
 
-                        {/* Asset actions */}
                         <Menu
                             visible={assetMenuVisible && selectedAsset?.id === item.id}
                             onDismiss={() => setAssetMenuVisible(false)}
@@ -397,24 +411,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
         return total + (asset.duration || 0);
     }, 0) || 0;
 
-    // Override back button behavior
-    useEffect(() => {
-        const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
-            // Allow navigation if we're intentionally navigating away
-            if (isNavigatingAway || !hasChanges) {
-                return;
-            }
-
-            // Prevent default behavior
-            e.preventDefault();
-
-            // Show unsaved changes dialog
-            setUnsavedChangesDialogVisible(true);
-        });
-
-        return unsubscribe;
-    }, [navigation, hasChanges, isNavigatingAway]);
-
     if (!playlistLoaded) {
         return (
             <PaperProvider theme={theme}>
@@ -430,9 +426,34 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
             </PaperProvider>
         )
     }
+
     return (
         <GestureHandlerRootView style={styles.flexContainer}>
-            {/* Playlist Stats */}
+            {/* Saving indicator - overlay top right */}
+            {saving && (
+                <Surface style={styles.savingIndicator}>
+                    <ActivityIndicator size="small" color={theme.colors.primary}/>
+                    <Text variant="bodySmall" style={styles.savingText}>
+                        {i18n.t('saving')}...
+                    </Text>
+                </Surface>
+            )}
+
+            {/* Saved message - overlay top right, shown for 2 seconds */}
+            {showSavedMessage && !saving && (
+                <Surface style={styles.savedIndicator}>
+                    <IconButton
+                        icon="check-circle"
+                        size={16}
+                        iconColor={theme.colors.primary}
+                        style={styles.savedIcon}
+                    />
+                    <Text variant="bodySmall" style={styles.savedText}>
+                        {i18n.t('saved')}
+                    </Text>
+                </Surface>
+            )}
+
             <Surface style={styles.statsContainer}>
                 <View style={styles.statsRow}>
                     <Text variant="headlineSmall">
@@ -460,7 +481,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                 </View>
             </Surface>
 
-            {/* Assets List with Drag and Drop */}
             {playlist.assets && playlist.assets.length > 0 ? (
                 <DraggableFlatList
                     data={playlist.assets}
@@ -474,7 +494,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                 renderEmptyState()
             )}
 
-            {/* Add Media FAB */}
             {playlist.assets && playlist.assets.length > 0 &&
                 <FAB
                     icon="plus"
@@ -483,21 +502,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                     label={i18n.t('add_media')}
                 />}
 
-            {/* Loading Overlay */}
-            {saving && (
-                <Portal>
-                    <View style={styles.loadingOverlay}>
-                        <Surface style={styles.loadingCard}>
-                            <ActivityIndicator size="large"/>
-                            <Text style={styles.loadingText}>
-                                {i18n.t('saving')}...
-                            </Text>
-                        </Surface>
-                    </View>
-                </Portal>
-            )}
-
-            {/* Edit Name Dialog */}
             <Portal>
                 <Dialog
                     visible={editNameDialogVisible}
@@ -528,62 +532,6 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                 </Dialog>
             </Portal>
 
-            {/* Unsaved Changes Dialog */}
-            <Portal>
-                <Dialog
-                    visible={unsavedChangesDialogVisible}
-                    onDismiss={() => setUnsavedChangesDialogVisible(false)}
-                >
-                    <Dialog.Icon icon="content-save-alert"/>
-                    <Dialog.Title>{i18n.t('unsaved_changes')}</Dialog.Title>
-                    <Dialog.Content>
-                        <Text variant="bodyMedium">
-                            {i18n.t('unsaved_changes_message')}
-                        </Text>
-                    </Dialog.Content>
-                    <Dialog.Actions>
-                        <Button
-                            onPress={discardChangesAndGoBack}
-                            buttonColor={theme.colors.error}
-                            textColor={theme.colors.onError}
-                        >
-                            {i18n.t('discard')}
-                        </Button>
-                        <Button onPress={() => setUnsavedChangesDialogVisible(false)}>
-                            {i18n.t('cancel')}
-                        </Button>
-                        <Button
-                            onPress={saveChangesAndGoBack}
-                            mode="contained"
-                        >
-                            {i18n.t('save')}
-                        </Button>
-                    </Dialog.Actions>
-                </Dialog>
-            </Portal>
-
-            {/* Success Dialog */}
-            <Portal>
-                <Dialog
-                    visible={successDialogVisible}
-                    onDismiss={() => setSuccessDialogVisible(false)}
-                >
-                    <Dialog.Icon icon="check-circle"/>
-                    <Dialog.Title>{i18n.t('success')}</Dialog.Title>
-                    <Dialog.Content>
-                        <Text variant="bodyMedium">
-                            {i18n.t('playlist_saved')}
-                        </Text>
-                    </Dialog.Content>
-                    <Dialog.Actions>
-                        <Button onPress={() => setSuccessDialogVisible(false)}>
-                            {i18n.t('close')}
-                        </Button>
-                    </Dialog.Actions>
-                </Dialog>
-            </Portal>
-
-            {/* Error Dialog */}
             <Portal>
                 <Dialog
                     visible={errorDialogVisible}
@@ -612,6 +560,44 @@ const useStyles = (theme: any) =>
         flexContainer: {
             flex: 1,
             backgroundColor: theme.colors.background,
+        },
+        savingIndicator: {
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 6,
+            paddingHorizontal: 12,
+            borderRadius: 20,
+            elevation: 4,
+            zIndex: 1000,
+            backgroundColor: theme.colors.surface,
+        },
+        savingText: {
+            marginLeft: 8,
+            color: theme.colors.onSurface,
+        },
+        savedIndicator: {
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 4,
+            paddingHorizontal: 12,
+            paddingLeft: 4,
+            borderRadius: 20,
+            elevation: 2,
+            zIndex: 1000,
+            backgroundColor: theme.colors.primaryContainer,
+        },
+        savedIcon: {
+            margin: 0,
+            padding: 0,
+        },
+        savedText: {
+            color: theme.colors.onPrimaryContainer,
         },
         statsContainer: {
             margin: 16,
@@ -711,26 +697,6 @@ const useStyles = (theme: any) =>
         },
         addFirstMediaButton: {
             marginTop: 16,
-        },
-        loadingOverlay: {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        loadingCard: {
-            padding: 24,
-            borderRadius: 12,
-            alignItems: 'center',
-            minWidth: 200,
-        },
-        loadingText: {
-            marginTop: 16,
-            textAlign: 'center',
         },
     });
 
