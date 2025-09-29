@@ -61,17 +61,15 @@ export type RootStackParamList = {
     Album: { album: Album, videoOnly: boolean, playerHeight?: number };
     Playlists: { playerHeight?: number };
     PlaylistEdit: {
-        playlist: {
-            id?: number;
-            name?: string;
-            assets?: any[];
-        };
+        playlistId: number;
         isNew?: boolean;
     };
     MediaSelector: {
         onSelectAssets: (assets: Asset[]) => void;
         excludeAssets?: Asset[];
         allowMultiple?: boolean;
+        playlistName?: string;
+        playlistId?: number;
     };
     PictureAlbums: any;
     VideoAlbums: any;
@@ -102,6 +100,9 @@ const MainContent: React.FC = () => {
     const [manualCompactMode, setManualCompactMode] = useState<boolean>(false);
     const loadMoreAssetsRef = useRef<(() => Promise<void>) | null>(null);
 
+    // Playlist refresh management
+    const [playlistsScreenRef, setPlaylistsScreenRef] = useState<PlaylistsScreenRef | null>(null);
+
     // Redux and database setup
     const cast = useSelector((state: IRootState) => state.cast);
     const expo = SQLite.openDatabaseSync('db.db');
@@ -119,9 +120,11 @@ const MainContent: React.FC = () => {
     useBackgroundNotification();
 
     // Load theme preference from storage on initialization
-    AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
-        setTheme(value ? value : "auto");
-    })
+    useEffect(() => {
+        AsyncStorage.getItem(SETTINGS_THEME).then((value) => {
+            setTheme(value ? value : "auto");
+        });
+    }, []);
 
     // Handle cast manager errors with toast notifications
     useEffect(() => {
@@ -156,8 +159,8 @@ const MainContent: React.FC = () => {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
                         // Show error toast for file copy failures
-                        setToastText1("Failed to prepare media file");
-                        setToastText2("Check storage permissions and try again");
+                        setToastText1(i18n.t('failed_to_prepare_media_file'));
+                        setToastText2(i18n.t('check_storage_permissions_and_try_again'));
                         setToastVisible(true);
                         return;
                     }
@@ -188,7 +191,7 @@ const MainContent: React.FC = () => {
 
                         // Show success toast for first media or when manually selecting
                         if (cast.assets.length === 1 || cast.currentIndex === 0) {
-                            setToastText1(`Now casting: ${asset.filename}`);
+                            setToastText1(i18n.t('now_casting', {filename: asset.filename}));
                             setToastText2(connectedDevice?.name || "");
                             setToastVisible(true);
                         }
@@ -197,14 +200,14 @@ const MainContent: React.FC = () => {
                         console.error('Main: Failed to cast media:', castError);
 
                         // Show error toast for casting failures
-                        setToastText1("Failed to cast media");
-                        setToastText2((castError as Error).message || "Unknown error");
+                        setToastText1(i18n.t('failed_to_cast_media'));
+                        setToastText2((castError as Error).message || i18n.t('unknown_error'));
                         setToastVisible(true);
                     }
                 }
             }
         })();
-    }, [cast?.currentAsset, connectedDevice?.name]);
+    }, [cast?.currentAsset, connectedDevice?.name, i18n]);
 
     /**
      * Callback for autoplay to load more assets from the current screen
@@ -274,19 +277,19 @@ const MainContent: React.FC = () => {
             setCastDialogVisible(false);
 
             // Show connection success toast
-            setToastText1(`Connected to ${device.name}`);
-            setToastText2("Ready to cast media");
+            setToastText1(i18n.t('connected_to_device', {deviceName: device.name}));
+            setToastText2(i18n.t('ready_to_cast_media'));
             setToastVisible(true);
 
         } catch (connectError) {
             console.error('Main: Failed to connect to device:', connectError);
 
             // Show connection error toast
-            setToastText1(`Failed to connect to ${device.name}`);
-            setToastText2((connectError as Error).message || "Connection failed");
+            setToastText1(i18n.t('failed_to_connect_to_device', {deviceName: device.name}));
+            setToastText2((connectError as Error).message || i18n.t('connection_failed'));
             setToastVisible(true);
         }
-    }, [castManager]);
+    }, [castManager, i18n]);
 
     /**
      * Handle cast button press - connect/disconnect or show device list
@@ -297,14 +300,14 @@ const MainContent: React.FC = () => {
                 await castManager.disconnect();
 
                 // Show disconnection toast
-                setToastText1("Disconnected from cast device");
+                setToastText1(i18n.t('disconnected_from_cast_device'));
                 setToastText2("");
                 setToastVisible(true);
 
             } catch (disconnectError) {
                 console.error('Main: Failed to disconnect:', disconnectError);
-                setToastText1("Failed to disconnect");
-                setToastText2((disconnectError as Error).message || "Disconnect failed");
+                setToastText1(i18n.t('failed_to_disconnect'));
+                setToastText2((disconnectError as Error).message || i18n.t('disconnect_failed'));
                 setToastVisible(true);
             }
         } else {
@@ -322,6 +325,15 @@ const MainContent: React.FC = () => {
     const handlePlaylistsPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
         navigation.navigate('Playlists', {});
     }, []);
+
+    /**
+     * Handle playlist saved callback - refresh playlists list
+     */
+    const handlePlaylistSaved = useCallback(() => {
+        if (playlistsScreenRef) {
+            playlistsScreenRef.refreshPlaylists();
+        }
+    }, [playlistsScreenRef]);
 
     /**
      * Delete all files from the server directory
@@ -443,8 +455,8 @@ const MainContent: React.FC = () => {
                 console.error('Main: Error starting servers:', (err as Error).message);
 
                 // Show server start error toast
-                setToastText1("Failed to start media server");
-                setToastText2("Media casting may not work properly");
+                setToastText1(i18n.t('failed_to_start_media_server'));
+                setToastText2(i18n.t('media_casting_may_not_work_properly'));
                 setToastVisible(true);
             }
         };
@@ -465,7 +477,7 @@ const MainContent: React.FC = () => {
                 await Promise.all(stopPromises);
             })();
         };
-    }, [connectedDevice]);
+    }, [connectedDevice, i18n]);
 
     // App initialization effect
     useEffect(() => {
@@ -509,7 +521,7 @@ const MainContent: React.FC = () => {
                     {/* Albums screen with player height prop */}
                     <Stack.Screen
                         name="Albums"
-                        options={{headerShown: true}}
+                        options={{headerShown: true, title: i18n.t('albums'),}}
                     >
                         {(props) => {
                             const albumsRef = useRef<AlbumsScreenRef>(null);
@@ -587,9 +599,11 @@ const MainContent: React.FC = () => {
                             useEffect(() => {
                                 if (playlistsRef.current?.refreshPlaylists) {
                                     loadMoreAssetsRef.current = playlistsRef.current.refreshPlaylists;
+                                    setPlaylistsScreenRef(playlistsRef.current);
                                 }
                                 return () => {
                                     loadMoreAssetsRef.current = null;
+                                    setPlaylistsScreenRef(null);
                                 };
                             }, []);
 
@@ -615,8 +629,14 @@ const MainContent: React.FC = () => {
                             headerTintColor: theme.colors.onSurface,
                             headerShadowVisible: false,
                         })}
-                        component={PlaylistEditScreen}
-                    />
+                    >
+                        {(props) => (
+                            <PlaylistEditScreen
+                                {...props}
+                                onPlaylistSaved={handlePlaylistSaved}
+                            />
+                        )}
+                    </Stack.Screen>
 
                     {/* Media selector screen */}
                     <Stack.Screen
@@ -631,8 +651,7 @@ const MainContent: React.FC = () => {
                             headerShadowVisible: false,
                             presentation: 'modal',
                         }}
-                        component={MediaSelectorScreen}
-                    />
+                    >{(props: any) => <MediaSelectorScreen {...props} />}</Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
 
@@ -675,7 +694,7 @@ const MainContent: React.FC = () => {
                             {i18n.t('version', {version: app.expo.version})}
                         </Text>
                         <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center'}}>
-                            Cast your photos, videos, and audio to DLNA/UPnP devices with autoplay support
+                            {i18n.t('app_description')}
                         </Text>
                         <Text variant="bodyLarge" style={{marginTop: 20}}>
                             {i18n.t('source_code')}
@@ -707,7 +726,7 @@ const MainContent: React.FC = () => {
 
                         {/* Autoplay feature highlight */}
                         <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center', fontStyle: 'italic'}}>
-                            New: Automatic media progression with customizable timing and smart loading
+                            {i18n.t('autoplay_feature_highlight')}
                         </Text>
                     </Dialog.Content>
                     <Dialog.Actions>

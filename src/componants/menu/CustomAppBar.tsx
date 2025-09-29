@@ -31,10 +31,23 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     const [menuVisible, setMenuVisible] = useState(false);
     const {theme} = useContext(ThemeContext);
     const [castIcon, setCastIcon] = useState<string | null>(castManager?.isConnected() ? "cast-connected" : "cast");
+
+    // Get title from options or route
     let title = getHeaderTitle(options, route.name);
+
+    // Custom title logic for specific routes
     if (route.name === "Album" && route?.params?.album) {
         title = route.params.album.title;
+    } else if (route.name === "PlaylistEdit" && route?.params?.playlist?.name) {
+        title = `${i18n.t('edit')} "${route.params.playlist.name}"`;
+    } else if (route.name === "MediaSelector") {
+        if (route?.params?.playlistName) {
+            title = i18n.t('add_media_to_named_playlist', {playlistName: route.params.playlistName});
+        } else {
+            title = i18n.t('select_media_title');
+        }
     }
+
     const {isConnected} = useCastManager();
 
     // Determine if we should hide cast and menu buttons

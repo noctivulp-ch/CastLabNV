@@ -140,28 +140,18 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
             try {
                 const newPlaylist = new PlayList(
                     newPlaylistName.trim(),
-                    [], // empty assets array
-                    undefined, // id will be set by database
-                    undefined, // created_at will be set by database
-                    undefined  // updated_at will be set by database
+                    [],
+                    undefined,
+                    undefined,
+                    undefined
                 );
 
                 const result = await insertOrUpdatePlayList(newPlaylist);
-
-                // Refresh the playlists list immediately
                 await loadPlaylists();
 
-                // Create serializable data for navigation with proper ID
                 const insertedId = Array.isArray(result) && result.length > 0 ? result[0].id : newPlaylist.id;
-                const serializablePlaylist = {
-                    id: insertedId,
-                    name: newPlaylist.name,
-                    assets: []
-                };
-
-                // Navigate to playlist edit screen to add media
                 (navigation as any).navigate('PlaylistEdit', {
-                    playlist: serializablePlaylist,
+                    playlistId: insertedId,
                     isNew: true
                 });
                 setCreateDialogVisible(false);
@@ -235,11 +225,9 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
                 console.error('navigateToPlaylistEdit: playlist is undefined');
                 return;
             }
-
             try {
-                const serializablePlaylist = createSerializablePlaylist(playlist);
                 (navigation as any).navigate('PlaylistEdit', {
-                    playlist: serializablePlaylist
+                    playlistId: playlist.id
                 });
             } catch (error) {
                 console.error('Failed to navigate to PlaylistEdit:', error);

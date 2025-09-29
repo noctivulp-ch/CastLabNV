@@ -95,3 +95,24 @@ export const getAllPlayLists = async (): Promise<PlayList[]> => {
     }
     return playLists;
 }
+
+/**
+ * Returns a single playlist in database
+ */
+export const getPlayList = async (playlist_id: number): Promise<PlayList | null> => {
+    let playList: PlayList | null = null;
+    try {
+        let results = await db.select().from(playlistsTable).where(eq(playlistsTable.id, playlist_id)).limit(1);
+        const playlistDB = results[0];
+        playList = {
+            id: playlistDB.id,
+            name: playlistDB.name,
+            assets: playlistDB?.assets ? JSON.parse(playlistDB.assets as string) : null,
+            created_at: playlistDB.created_at,
+            updated_at: playlistDB.updated_at,
+        };
+    } catch (err) {
+        console.error(err);
+    }
+    return playList;
+}

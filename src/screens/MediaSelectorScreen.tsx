@@ -1,12 +1,13 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {Dimensions, FlatList, Image, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
+    ActivityIndicator,
     Button,
     Checkbox,
-    Chip,
     FAB,
     IconButton,
     Menu,
+    PaperProvider,
     SegmentedButtons,
     Surface,
     Text,
@@ -18,12 +19,14 @@ import {initTranslate} from '../localization/translate';
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {DatePickerModal} from 'react-native-paper-dates';
+import PlayList from "../entities/PlayList";
+import {getPlayList} from "../../db/playlistDB";
 
 type RootStackParamList = {
     MediaSelector: {
         onSelectAssets: (assets: Asset[]) => void;
-        excludeAssets?: Asset[];
         allowMultiple?: boolean;
+        playlistId: number;
     };
 };
 
@@ -33,6 +36,7 @@ interface MediaSelectorScreenProps {
 }
 
 type MediaFilter = 'all' | 'photo' | 'video' | 'audio';
+type ViewMode = 'albums' | 'assets';
 
 /**
  * Date range interface for filtering media
@@ -44,6 +48,7 @@ interface DateRange {
 
 const {width: screenWidth} = Dimensions.get('window');
 const ITEM_SIZE = (screenWidth - 48) / 3; // 3 columns with padding
+const ALBUM_ITEM_SIZE = (screenWidth - 48) / 2; // 2 columns for albums
 
 const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     const theme = useTheme();
@@ -51,7 +56,14 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     const navigation = useNavigation();
     const route = useRoute<MediaSelectorRouteProp>();
     const insets = useSafeAreaInsets();
-    const {onSelectAssets, excludeAssets = [], allowMultiple = true} = route.params;
+    const [excludeAssets, setExcludeAssets] = useState<Asset[]>([]);
+    const {allowMultiple = true, onSelectAssets, playlistId} = route.params;
+    const [playlist, setPlaylist] = useState<PlayList>(new PlayList());
+    // Media library permissions
+    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+
+    // Navigation state - start with albums view
+    const [viewMode, setViewMode] = useState<ViewMode>('albums');
 
     // State management
     const [assets, setAssets] = useState<Asset[]>([]);
@@ -62,7 +74,8 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
     const [hasNextPage, setHasNextPage] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [endCursor, setEndCursor] = useState<string | undefined>(undefined); // Add cursor state
+    const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
+    const [playlistLoaded, setPlaylistLoaded] = useState(false);
 
     // Sorting state
     const [sortModificationTimeAsc, setSortModificationTimeAsc] = useState<SortByValue>([SortBy.modificationTime, false]);
@@ -81,51 +94,93 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
 
     const styles = useStyles(theme);
 
-    // Excluded asset IDs for quick lookup
+    // Excluded asset IDs for quick lookup - now used only for visual indication
     const excludedIds = useMemo(() =>
             new Set(excludeAssets.map(asset => asset.id)),
         [excludeAssets]
     );
-
+    useEffect(() => {
+        (async () => {
+            const initialPlaylist = await getPlayList(playlistId);
+            if (initialPlaylist) {
+                if (initialPlaylist?.assets && initialPlaylist.assets.length > 0) {
+                    setExcludeAssets(initialPlaylist.assets);
+                }
+                setPlaylist(initialPlaylist);
+            }
+            setPlaylistLoaded(true);
+        })();
+    }, []);
     /**
      * Update sorting criteria whenever individual sort options change
      */
     useEffect(() => {
-        const sortBy: SortByValue[] = [];
+        const newSortBy: SortByValue[] = [];
 
         if (sortDuration) {
-            sortBy.push(sortDuration);
+            newSortBy.push(sortDuration);
         }
         if (sortHeight) {
-            sortBy.push(sortHeight);
+            newSortBy.push(sortHeight);
         }
         if (sortWidth) {
-            sortBy.push(sortWidth);
+            newSortBy.push(sortWidth);
         }
         if (sortModificationTimeAsc) {
-            sortBy.push(sortModificationTimeAsc);
+            newSortBy.push(sortModificationTimeAsc);
         }
-        setSortBy(sortBy);
+        setSortBy(newSortBy);
     }, [sortModificationTimeAsc, sortDuration, sortWidth, sortHeight]);
+
+    /**
+     * Fetch galleries/albums from MediaLibrary
+     */
+    const fetchGalleries = useCallback(async () => {
+        try {
+            const albums = await MediaLibrary.getAlbumsAsync({
+                includeSmartAlbums: true,
+            });
+
+            // Sort albums by asset count (descending)
+            albums.sort((a, b) => b.assetCount - a.assetCount);
+            return albums;
+        } catch (error) {
+            console.error('MediaSelector: Error fetching albums:', error);
+            return [];
+        }
+    }, []);
+
+    /**
+     * Get albums from device - handles permission request if needed
+     */
+    const getAlbums = useCallback(async (): Promise<Album[]> => {
+
+        if (permissionResponse?.status !== 'granted') {
+            const newPermission = await requestPermission();
+
+            if (newPermission.status === 'granted') {
+                return await fetchGalleries();
+            } else {
+                console.warn('MediaSelector: Permission denied');
+                return [];
+            }
+        }
+        return await fetchGalleries();
+    }, [permissionResponse?.status, requestPermission, fetchGalleries]);
 
     /**
      * Load media library albums
      */
     const loadAlbums = useCallback(async () => {
         try {
-            const {status} = await MediaLibrary.requestPermissionsAsync();
-            if (status !== 'granted') {
-                return;
-            }
-
-            const albumsData = await MediaLibrary.getAlbumsAsync({
-                includeSmartAlbums: true,
-            });
+            const albumsData = await getAlbums();
             setAlbums(albumsData);
         } catch (error) {
-            console.error('Failed to load albums:', error);
+            console.error('MediaSelector: Failed to load albums:', error);
+        } finally {
+            setLoading(false);
         }
-    }, []);
+    }, [getAlbums]);
 
     /**
      * Convert our filter type to MediaLibrary type
@@ -182,12 +237,11 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                 setLoading(true);
                 setAssets([]);
                 setHasNextPage(true);
-                setEndCursor(undefined); // Reset cursor
+                setEndCursor(undefined);
             } else {
                 setLoadingMore(true);
             }
 
-            // Use proper cursor instead of Asset object
             const options = buildAssetsOptions(reset ? undefined : endCursor);
             const assetsPage = await MediaLibrary.getAssetsAsync(options);
 
@@ -198,7 +252,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
             }
 
             setHasNextPage(assetsPage.hasNextPage);
-            setEndCursor(assetsPage.endCursor); // Save cursor for next pagination
+            setEndCursor(assetsPage.endCursor);
         } catch (error) {
             console.error('Failed to load assets:', error);
         } finally {
@@ -208,19 +262,56 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     }, [buildAssetsOptions, endCursor]);
 
     /**
-     * Toggle asset selection
+     * Handle album selection - navigate to assets view
+     */
+    const handleAlbumSelect = useCallback((album: Album) => {
+        setSelectedAlbum(album);
+        setViewMode('assets');
+        setSelectedAssets([]);
+        // Reset filters when switching albums
+        setMediaFilter('all');
+        setDateRange({startDate: undefined, endDate: undefined});
+    }, []);
+
+    /**
+     * Navigate back to albums view
+     */
+    const handleBackToAlbums = useCallback(() => {
+        setViewMode('albums');
+        setSelectedAlbum(null);
+        setAssets([]);
+        setSelectedAssets([]);
+    }, []);
+
+    /**
+     * Handle hardware back button and navigation
+     */
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+            if (viewMode === 'assets') {
+                // Prevent default behavior of leaving the screen
+                e.preventDefault();
+                // Navigate back to albums view instead
+                handleBackToAlbums();
+            }
+            // If we're in albums view, allow normal navigation back to PlaylistEditScreen
+        });
+
+        return unsubscribe;
+    }, [navigation, viewMode, handleBackToAlbums]);
+
+    /**
+     * Toggle asset selection - now allows deselecting previously excluded assets
      */
     const toggleAssetSelection = useCallback((asset: Asset) => {
-        if (excludedIds.has(asset.id)) {
-            return; // Cannot select excluded assets
-        }
-
         setSelectedAssets(prev => {
             const isSelected = prev.some(selected => selected.id === asset.id);
 
             if (isSelected) {
+                // Deselect the asset
                 return prev.filter(selected => selected.id !== asset.id);
             } else {
+                // Select the asset
                 if (allowMultiple) {
                     return [...prev, asset];
                 } else {
@@ -228,21 +319,13 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                 }
             }
         });
-    }, [excludedIds, allowMultiple]);
+    }, [allowMultiple]);
 
     /**
      * Handle media filter change
      */
     const handleFilterChange = useCallback((value: string) => {
         setMediaFilter(value as MediaFilter);
-        setSelectedAssets([]);
-    }, []);
-
-    /**
-     * Handle album selection
-     */
-    const handleAlbumChange = useCallback((album: Album | null) => {
-        setSelectedAlbum(album);
         setSelectedAssets([]);
     }, []);
 
@@ -272,7 +355,13 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
             return null;
         }
 
-        const formatDate = (date: Date) => date.toLocaleDateString();
+        const formatDate = (date: Date) => {
+            try {
+                return date.toLocaleDateString();
+            } catch (error) {
+                return i18n.t('invalid_date');
+            }
+        };
 
         if (dateRange.startDate && dateRange.endDate) {
             return `${formatDate(dateRange.startDate)} - ${formatDate(dateRange.endDate)}`;
@@ -289,9 +378,20 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
      * Confirm selection and navigate back
      */
     const handleConfirmSelection = useCallback(() => {
-        onSelectAssets(selectedAssets);
-        navigation.goBack();
-    }, [selectedAssets, onSelectAssets, navigation]);
+
+        if (onSelectAssets && typeof onSelectAssets === 'function') {
+            try {
+                onSelectAssets(selectedAssets);
+                navigation.goBack();
+            } catch (error) {
+                console.error('MediaSelector: Error executing callback:', error);
+                navigation.goBack();
+            }
+        } else {
+            console.error('MediaSelector: No valid callback found in route params');
+            navigation.goBack();
+        }
+    }, [selectedAssets, navigation, onSelectAssets]);
 
     /**
      * Load more assets when reaching end of list
@@ -306,6 +406,9 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
      * Format duration for display
      */
     const formatDuration = useCallback((duration: number) => {
+        if (!duration || typeof duration !== 'number') {
+            return '0:00';
+        }
         const minutes = Math.floor(duration / 60);
         const seconds = Math.floor(duration % 60);
         return `${minutes}:${seconds.toString().padStart(2, '0')}`;
@@ -353,11 +456,40 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     }
 
     /**
-     * Render asset item
+     * Render album item for albums view
+     */
+    const renderAlbumItem = useCallback(({item}: { item: Album }) => {
+        return (
+            <TouchableOpacity
+                style={styles.albumItem}
+                onPress={() => handleAlbumSelect(item)}
+                activeOpacity={0.7}
+            >
+                <Surface style={styles.albumCard}>
+                    <View style={styles.albumThumbnail}>
+                        <Text variant="headlineMedium" style={styles.albumIcon}>
+                            📁
+                        </Text>
+                    </View>
+                    <View style={styles.albumInfo}>
+                        <Text variant="titleMedium" numberOfLines={2} style={styles.albumTitle}>
+                            {item.title}
+                        </Text>
+                        <Text variant="bodySmall" style={styles.albumCount}>
+                            {item.assetCount} {item.assetCount === 1 ? i18n.t('item') : i18n.t('items')}
+                        </Text>
+                    </View>
+                </Surface>
+            </TouchableOpacity>
+        );
+    }, [handleAlbumSelect, i18n, styles]);
+
+    /**
+     * Render asset item for assets view
      */
     const renderAssetItem = useCallback(({item}: { item: Asset }) => {
         const isSelected = selectedAssets.some(selected => selected.id === item.id);
-        const isExcluded = excludedIds.has(item.id);
+        const wasInPlaylist = excludedIds.has(item.id);
         const icon = getMediaIcon(item);
 
         return (
@@ -365,10 +497,9 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                 style={[
                     styles.assetItem,
                     isSelected && styles.selectedAssetItem,
-                    isExcluded && styles.excludedAssetItem,
+                    wasInPlaylist && !isSelected && styles.wasInPlaylistAssetItem,
                 ]}
                 onPress={() => toggleAssetSelection(item)}
-                disabled={isExcluded}
                 activeOpacity={0.7}
             >
                 <Image
@@ -378,7 +509,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                 />
 
                 {/* Media type overlay */}
-                {icon && (
+                {icon ? (
                     <View style={styles.mediaTypeOverlay}>
                         <IconButton
                             icon={icon}
@@ -386,25 +517,25 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                             iconColor="white"
                         />
                     </View>
-                )}
+                ) : null}
 
                 {/* Duration overlay for videos */}
-                {item.duration && item.mediaType === 'video' && (
+                {item.duration && item.mediaType === 'video' ? (
                     <View style={styles.durationOverlay}>
                         <Text style={styles.durationText}>
                             {formatDuration(item.duration)}
                         </Text>
                     </View>
-                )}
+                ) : null}
 
                 {/* Selection indicator */}
                 <View style={styles.selectionOverlay}>
-                    {isExcluded ? (
+                    {wasInPlaylist && !isSelected ? (
                         <IconButton
-                            icon="minus-circle"
+                            icon="check-circle"
                             size={24}
-                            iconColor={theme.colors.error}
-                            style={styles.excludedIcon}
+                            iconColor={theme.colors.primary}
+                            style={styles.wasInPlaylistIcon}
                         />
                     ) : (
                         <Checkbox
@@ -426,182 +557,262 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
         styles,
     ]);
 
-    // Load initial data
+    // Initialize albums on component mount and when permissions change
     useEffect(() => {
-        loadAlbums();
-    }, [loadAlbums]);
+        const initializeAlbums = async () => {
 
+            if (permissionResponse?.status === 'granted') {
+                const albums = await fetchGalleries();
+                setAlbums(albums);
+                setLoading(false);
+            } else if (permissionResponse?.status === 'denied') {
+                // Permission denied, show empty state
+                console.warn('MediaSelector: Permission denied, showing empty state');
+                setAlbums([]);
+                setLoading(false);
+            } else if (permissionResponse?.status === 'undetermined') {
+                // Permission not yet requested, request it
+                const albums = await getAlbums();
+                setAlbums(albums);
+                setLoading(false);
+            }
+        };
+
+        // Only run when permissionResponse is available
+        if (permissionResponse !== null) {
+            initializeAlbums();
+        }
+    }, [permissionResponse?.status, fetchGalleries, getAlbums]);
+
+    // Load assets when entering assets view or filters change
     useEffect(() => {
-        loadAssets(true);
-    }, [mediaFilter, selectedAlbum, sortBy, dateRange]);
-
+        if (viewMode === 'assets' && selectedAlbum) {
+            loadAssets(true);
+        }
+    }, [viewMode, selectedAlbum?.id, mediaFilter, sortBy, dateRange]);
+    if (!playlistLoaded) {
+        return (
+            <PaperProvider theme={theme}>
+                <View style={{
+                    flex: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 20,
+                    backgroundColor: theme.colors.background
+                }}>
+                    <ActivityIndicator size="large"/>
+                </View>
+            </PaperProvider>
+        )
+    }
     return (
         <View style={styles.container}>
-            {/* Title Header */}
-            <Surface style={styles.titleContainer}>
-                <Text variant="headlineSmall">
-                    {i18n.t('select_media_title')}
-                </Text>
-                {selectedAssets.length > 0 && (
+            {/* Breadcrumb - only show in assets view */}
+            {viewMode === 'assets' && (
+                <Surface style={styles.breadcrumbContainer}>
+                    <TouchableOpacity
+                        style={styles.breadcrumb}
+                        onPress={handleBackToAlbums}
+                        activeOpacity={0.7}
+                    >
+                        <IconButton
+                            icon="chevron-left"
+                            size={20}
+                            style={styles.breadcrumbIcon}
+                        />
+                        <Text variant="bodySmall" style={styles.breadcrumbText}>
+                            {i18n.t('all_albums')}
+                        </Text>
+                        <Text variant="bodySmall" style={styles.breadcrumbSeparator}>
+                            {' > '}
+                        </Text>
+                        <Text variant="bodySmall" style={[styles.breadcrumbText, styles.breadcrumbCurrent]}>
+                            {selectedAlbum?.title || i18n.t('unknown_album')}
+                        </Text>
+                        {getDateRangeDisplayText() && (
+                            <React.Fragment>
+                                <Text variant="bodySmall" style={styles.breadcrumbSeparator}>
+                                    {' • '}
+                                </Text>
+                                <Text variant="bodySmall" style={styles.breadcrumbText}>
+                                    {getDateRangeDisplayText()}
+                                </Text>
+                            </React.Fragment>
+                        )}
+                    </TouchableOpacity>
+                </Surface>
+            )}
+
+            {/* Selection count info */}
+            {selectedAssets.length > 0 && (
+                <Surface style={styles.selectionContainer}>
                     <Text variant="bodyMedium">
                         {i18n.t('selected_count', {count: selectedAssets.length})}
                     </Text>
-                )}
-            </Surface>
+                </Surface>
+            )}
 
-            {/* Breadcrumb */}
-            <Surface style={styles.breadcrumbContainer}>
-                <View style={styles.breadcrumb}>
-                    <Text variant="bodySmall" style={styles.breadcrumbText}>
-                        {selectedAlbum ? selectedAlbum.title : i18n.t('all_albums')}
-                    </Text>
-                    {getDateRangeDisplayText() && (
-                        <>
-                            <Text variant="bodySmall" style={styles.breadcrumbSeparator}> • </Text>
-                            <Text variant="bodySmall" style={styles.breadcrumbText}>
-                                {getDateRangeDisplayText()}
-                            </Text>
-                        </>
-                    )}
-                </View>
-            </Surface>
-
-            {/* Filter Controls Row 1: Media Type and Sort */}
-            <View style={styles.filtersContainer}>
-                <SegmentedButtons
-                    value={mediaFilter}
-                    onValueChange={handleFilterChange}
-                    buttons={[
-                        {value: 'all', label: i18n.t('all')},
-                        {value: 'photo', label: i18n.t('pictures')},
-                        {value: 'video', label: i18n.t('videos')},
-                        {value: 'audio', label: i18n.t('audios')},
-                    ]}
-                    style={styles.segmentedButtons}
-                />
-
-                <View style={styles.controlsRow}>
-                    {/* Sorting options menu */}
-                    <Menu
-                        visible={sortByMenuVisible}
-                        anchorPosition={"bottom"}
-                        mode={"elevated"}
-                        onDismiss={() => setSortByMenuVisible(false)}
-                        anchor={
-                            <Button
-                                icon={"sort"}
-                                mode="contained-tonal"
-                                onPress={() => setSortByMenuVisible(true)}
-                                style={styles.sortButton}
-                            >
-                                {i18n.t('sort')}
-                            </Button>
-                        }
-                    >
-                        <Menu.Item onPress={() => {
-                            setSortModificationTimeAsc([SortBy.modificationTime, !sortModificationTimeAsc[1]]);
-                        }} title={i18n.t('modificationTime')}
-                                   trailingIcon={sortModificationTimeAsc[1] ? "arrow-up-thick" : "arrow-down-thick"}/>
-
-                        <Menu.Item onPress={() => {
-                            setSortDuration([SortBy.duration, sortDuration ? !sortDuration[1] : true]);
-                        }} title={i18n.t('duration')} trailingIcon={getTrailingIconDuration()}/>
-
-                        <Menu.Item onPress={() => {
-                            setSortWidth([SortBy.width, sortWidth ? !sortWidth[1] : true]);
-                        }} title={i18n.t('width')} trailingIcon={getTrailingIconWidth()}/>
-
-                        <Menu.Item onPress={() => {
-                            setSortHeight([SortBy.height, sortHeight ? !sortHeight[1] : true]);
-                        }} title={i18n.t('height')} trailingIcon={getTrailingIconHeight()}/>
-
-                        <Menu.Item onPress={() => {
-                            setSortDuration(undefined);
-                            setSortWidth(undefined);
-                            setSortHeight(undefined);
-                            setSortModificationTimeAsc([SortBy.modificationTime, false]);
-                            setSortByMenuVisible(false);
-                        }} title={i18n.t('reset')}/>
-                    </Menu>
-
-                    {/* Date filter button */}
-                    <Button
-                        icon="calendar-range"
-                        mode={dateRange.startDate || dateRange.endDate ? "contained" : "contained-tonal"}
-                        onPress={() => setDatePickerOpen(true)}
-                        style={styles.dateFilterButton}
-                    >
-                        {i18n.t('date_filter')}
-                    </Button>
-
-                    {/* Clear date filter button - only show when filter is active */}
-                    {(dateRange.startDate || dateRange.endDate) && (
-                        <IconButton
-                            icon="close"
-                            mode="contained-tonal"
-                            onPress={clearDateFilter}
-                            size={20}
-                        />
-                    )}
-                </View>
-
-                {/* Album Selector */}
-                {albums.length > 0 && (
-                    <View style={styles.albumSelector}>
-                        <FlatList
-                            horizontal
-                            data={[null, ...albums]}
-                            keyExtractor={(item) => item?.id || 'all'}
-                            renderItem={({item}) => (
-                                <Chip
-                                    mode={selectedAlbum?.id === item?.id ? 'flat' : 'outlined'}
-                                    onPress={() => handleAlbumChange(item)}
-                                    style={styles.albumChip}
-                                >
-                                    {item?.title || i18n.t('all_albums')}
-                                </Chip>
-                            )}
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.albumList}
-                        />
+            {viewMode === 'albums' ? (
+                /* Albums View */
+                loading ? (
+                    <View style={styles.loadingContainer}>
+                        <Text>{i18n.t('loading')}...</Text>
+                        <Text variant="bodySmall" style={{marginTop: 8}}>
+                            {permissionResponse === null ? i18n.t('checking_permissions') : i18n.t('loading_albums_from_media_library')}
+                        </Text>
                     </View>
-                )}
-            </View>
+                ) : albums.length === 0 ? (
+                    <View style={styles.emptyContainer}>
+                        <Text variant="headlineSmall" style={styles.emptyTitle}>
+                            {permissionResponse?.status === 'denied' ? i18n.t('media_access_denied') : i18n.t('no_albums_found')}
+                        </Text>
+                        <Text variant="bodyLarge" style={styles.emptySubtitle}>
+                            {permissionResponse?.status === 'denied'
+                                ? i18n.t('media_access_denied_message')
+                                : i18n.t('no_albums_found_message')}
+                        </Text>
+                        {permissionResponse?.status !== 'denied' && (
+                            <Button
+                                mode="contained"
+                                onPress={() => loadAlbums()}
+                                style={styles.retryButton}
+                                icon="refresh"
+                            >
+                                {i18n.t('retry')}
+                            </Button>
+                        )}
+                    </View>
+                ) : (
+                    <FlatList
+                        data={albums}
+                        renderItem={renderAlbumItem}
+                        keyExtractor={(item) => item.id}
+                        numColumns={2}
+                        contentContainerStyle={styles.albumsGrid}
+                        showsVerticalScrollIndicator={false}
+                    />
+                )
+            ) : (
+                /* Assets View */
+                <>
+                    {/* Filter Controls */}
+                    <View style={styles.filtersContainer}>
+                        <SegmentedButtons
+                            value={mediaFilter}
+                            onValueChange={handleFilterChange}
+                            buttons={[
+                                {value: 'all', label: i18n.t('all')},
+                                {value: 'photo', label: i18n.t('pictures')},
+                                {value: 'video', label: i18n.t('videos')},
+                                {value: 'audio', label: i18n.t('audios')},
+                            ]}
+                            style={styles.segmentedButtons}
+                        />
 
-            {/* Assets count info */}
-            <View style={styles.statusBar}>
-                <Text variant="bodySmall" style={[styles.statusText, {color: theme.colors.onSurfaceVariant}]}>
-                    {assets.length} {assets.length === 1 ? i18n.t('item') : i18n.t('items')}
-                    {hasNextPage && ` (${i18n.t('more_available')})`}
-                </Text>
-                {loadingMore && (
-                    <Text variant="bodySmall" style={[styles.loadingText, {color: theme.colors.primary}]}>
-                        {i18n.t('loading')}...
-                    </Text>
-                )}
-            </View>
+                        <View style={styles.controlsRow}>
+                            {/* Sorting options menu */}
+                            <Menu
+                                visible={sortByMenuVisible}
+                                anchorPosition={"bottom"}
+                                mode={"elevated"}
+                                onDismiss={() => setSortByMenuVisible(false)}
+                                anchor={
+                                    <Button
+                                        icon={"sort"}
+                                        mode="contained-tonal"
+                                        onPress={() => setSortByMenuVisible(true)}
+                                        style={styles.sortButton}
+                                    >
+                                        {i18n.t('sort')}
+                                    </Button>
+                                }
+                            >
+                                <Menu.Item onPress={() => {
+                                    setSortModificationTimeAsc([SortBy.modificationTime, !sortModificationTimeAsc[1]]);
+                                }} title={i18n.t('modificationTime')}
+                                           trailingIcon={sortModificationTimeAsc[1] ? "arrow-up-thick" : "arrow-down-thick"}/>
 
-            {/* Assets Grid */}
-            <FlatList
-                data={assets}
-                renderItem={renderAssetItem}
-                keyExtractor={(item) => item.id}
-                numColumns={3}
-                contentContainerStyle={styles.assetsGrid}
-                onEndReached={handleLoadMore}
-                onEndReachedThreshold={0.5}
-                ListFooterComponent={
-                    loadingMore ? (
-                        <View style={styles.loadingFooter}>
-                            <Text>{i18n.t('loading_more')}...</Text>
+                                <Menu.Item onPress={() => {
+                                    setSortDuration([SortBy.duration, sortDuration ? !sortDuration[1] : true]);
+                                }} title={i18n.t('duration')} trailingIcon={getTrailingIconDuration()}/>
+
+                                <Menu.Item onPress={() => {
+                                    setSortWidth([SortBy.width, sortWidth ? !sortWidth[1] : true]);
+                                }} title={i18n.t('width')} trailingIcon={getTrailingIconWidth()}/>
+
+                                <Menu.Item onPress={() => {
+                                    setSortHeight([SortBy.height, sortHeight ? !sortHeight[1] : true]);
+                                }} title={i18n.t('height')} trailingIcon={getTrailingIconHeight()}/>
+
+                                <Menu.Item onPress={() => {
+                                    setSortDuration(undefined);
+                                    setSortWidth(undefined);
+                                    setSortHeight(undefined);
+                                    setSortModificationTimeAsc([SortBy.modificationTime, false]);
+                                    setSortByMenuVisible(false);
+                                }} title={i18n.t('reset')}/>
+                            </Menu>
+
+                            {/* Date filter button */}
+                            <Button
+                                icon="calendar-range"
+                                mode={dateRange.startDate || dateRange.endDate ? "contained" : "contained-tonal"}
+                                onPress={() => setDatePickerOpen(true)}
+                                style={styles.dateFilterButton}
+                            >
+                                {i18n.t('date_filter')}
+                            </Button>
+
+                            {/* Clear date filter button */}
+                            {(dateRange.startDate || dateRange.endDate) && (
+                                <IconButton
+                                    icon="close"
+                                    mode="contained-tonal"
+                                    onPress={clearDateFilter}
+                                    size={20}
+                                />
+                            )}
                         </View>
-                    ) : null
-                }
-                showsVerticalScrollIndicator={false}
-            />
+                    </View>
 
-            {/* Selection FAB */}
-            {selectedAssets.length > 0 && (
+                    {/* Assets count info */}
+                    <View style={styles.statusBar}>
+                        <Text variant="bodySmall" style={[styles.statusText, {color: theme.colors.onSurfaceVariant}]}>
+                            {assets.length} {assets.length === 1 ? i18n.t('item') : i18n.t('items')}
+                            {hasNextPage ? ` (${i18n.t('more_available')})` : ''}
+                        </Text>
+                        {loadingMore ? (
+                            <Text variant="bodySmall" style={[styles.loadingText, {color: theme.colors.primary}]}>
+                                {i18n.t('loading')}...
+                            </Text>
+                        ) : null}
+                    </View>
+
+                    {/* Assets Grid */}
+                    <FlatList
+                        data={assets}
+                        renderItem={renderAssetItem}
+                        keyExtractor={(item, index) => item.id ? `${item.id}-${index}` : `asset-${index}`}
+                        numColumns={3}
+                        contentContainerStyle={styles.assetsGrid}
+                        onEndReached={handleLoadMore}
+                        onEndReachedThreshold={0.5}
+                        ListFooterComponent={
+                            loadingMore ? (
+                                <View style={styles.loadingFooter}>
+                                    <Text>
+                                        {i18n.t('loading_more')}...
+                                    </Text>
+                                </View>
+                            ) : null
+                        }
+                        showsVerticalScrollIndicator={false}
+                    />
+                </>
+            )}
+
+            {/* Selection FAB - show in both views if items are selected */}
+            {selectedAssets.length > 0 ? (
                 <FAB
                     icon="check"
                     style={[styles.fab, {bottom: Math.max(insets.bottom, 16) + 16}]}
@@ -611,7 +822,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
                         : i18n.t('select')
                     }
                 />
-            )}
+            ) : null}
 
             {/* Date Range Picker Modal */}
             <DatePickerModal
@@ -642,19 +853,64 @@ const useStyles = (theme: any) =>
             paddingHorizontal: 16,
             paddingVertical: 12,
         },
-        breadcrumbContainer: {
+        selectionContainer: {
             paddingHorizontal: 16,
+            paddingVertical: 8,
+            backgroundColor: theme.colors.primaryContainer,
+        },
+        breadcrumbContainer: {
+            paddingHorizontal: 8,
             paddingVertical: 8,
         },
         breadcrumb: {
             flexDirection: 'row',
             alignItems: 'center',
         },
+        breadcrumbIcon: {
+            margin: 0,
+        },
         breadcrumbText: {
             color: theme.colors.onSurfaceVariant,
-            fontStyle: 'italic',
+        },
+        breadcrumbCurrent: {
+            fontWeight: 'bold',
+            color: theme.colors.onSurface,
         },
         breadcrumbSeparator: {
+            color: theme.colors.onSurfaceVariant,
+        },
+        albumsGrid: {
+            padding: 8,
+        },
+        albumItem: {
+            width: ALBUM_ITEM_SIZE,
+            margin: 8,
+        },
+        albumCard: {
+            padding: 16,
+            borderRadius: 12,
+            elevation: 2,
+            height: 120,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        albumThumbnail: {
+            marginBottom: 8,
+        },
+        albumIcon: {
+            fontSize: 32,
+            textAlign: 'center',
+        },
+        albumInfo: {
+            alignItems: 'center',
+        },
+        albumTitle: {
+            textAlign: 'center',
+            fontWeight: 'bold',
+            marginBottom: 4,
+        },
+        albumCount: {
+            textAlign: 'center',
             color: theme.colors.onSurfaceVariant,
         },
         filtersContainer: {
@@ -675,15 +931,6 @@ const useStyles = (theme: any) =>
         },
         dateFilterButton: {
             flex: 1,
-        },
-        albumSelector: {
-            marginBottom: 8,
-        },
-        albumList: {
-            paddingHorizontal: 4,
-        },
-        albumChip: {
-            marginHorizontal: 4,
         },
         statusBar: {
             flexDirection: "row",
@@ -714,8 +961,10 @@ const useStyles = (theme: any) =>
             borderWidth: 3,
             borderColor: theme.colors.primary,
         },
-        excludedAssetItem: {
-            opacity: 0.5,
+        wasInPlaylistAssetItem: {
+            borderWidth: 2,
+            borderColor: theme.colors.primary,
+            opacity: 0.7,
         },
         assetImage: {
             width: '100%',
@@ -745,7 +994,7 @@ const useStyles = (theme: any) =>
             top: 4,
             right: 4,
         },
-        excludedIcon: {
+        wasInPlaylistIcon: {
             backgroundColor: 'rgba(255, 255, 255, 0.9)',
             borderRadius: 12,
         },
@@ -757,6 +1006,32 @@ const useStyles = (theme: any) =>
         loadingFooter: {
             padding: 20,
             alignItems: 'center',
+        },
+        loadingContainer: {
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 20,
+        },
+        emptyContainer: {
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+            paddingHorizontal: 32,
+            paddingVertical: 64,
+        },
+        emptyTitle: {
+            textAlign: 'center',
+            marginBottom: 16,
+            color: theme.colors.onSurfaceVariant,
+        },
+        emptySubtitle: {
+            textAlign: 'center',
+            marginBottom: 32,
+            color: theme.colors.onSurfaceVariant,
+        },
+        retryButton: {
+            marginTop: 16,
         },
     });
 

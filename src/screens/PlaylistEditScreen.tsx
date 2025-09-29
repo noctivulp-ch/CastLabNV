@@ -1,5 +1,5 @@
-import React, {useCallback, useState} from 'react';
-import {FlatList, Image, StyleSheet, View,} from 'react-native';
+import React, {useCallback, useEffect, useState} from 'react';
+import {Image, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
     ActivityIndicator,
     Button,
@@ -9,6 +9,7 @@ import {
     FAB,
     IconButton,
     Menu,
+    PaperProvider,
     Portal,
     Surface,
     Text,
@@ -17,33 +18,32 @@ import {
 } from 'react-native-paper';
 import {Asset} from 'expo-media-library';
 import PlayList from '../entities/PlayList';
-import {insertOrUpdatePlayList} from '../../db/playlistDB';
+import {getPlayList, insertOrUpdatePlayList} from '../../db/playlistDB';
 import {initTranslate} from '../localization/translate';
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import DraggableFlatList, {RenderItemParams, ScaleDecorator} from 'react-native-draggable-flatlist';
+import {GestureHandlerRootView} from 'react-native-gesture-handler';
 
 type RootStackParamList = {
     PlaylistEdit: {
-        playlist: {
-            id?: number;
-            name?: string;
-            assets?: any[];
-        };
+        playlistId: number;
         isNew?: boolean;
     };
     MediaSelector: {
         onSelectAssets: (assets: Asset[]) => void;
-        excludeAssets?: Asset[];
         allowMultiple?: boolean;
+        playlistId: number;
     };
 };
 
 type PlaylistEditRouteProp = RouteProp<RootStackParamList, 'PlaylistEdit'>;
 
 interface PlaylistEditScreenProps {
+    onPlaylistSaved?: () => void;
 }
 
-const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
+const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}) => {
     const theme = useTheme();
     const i18n = initTranslate();
     const navigation = useNavigation();
@@ -51,41 +51,12 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
     const insets = useSafeAreaInsets();
 
     // Safety check for route params
-    const routeParams = route.params || {playlist: {}, isNew: false};
-    const {playlist: initialPlaylist = {}, isNew = false} = routeParams;
+    const {playlistId, isNew} = route.params || {playlistId: -1, isNew: false};
 
-    // Create a proper PlayList instance from serializable data with safety checks
-    const [playlist, setPlaylist] = useState<PlayList>(() => {
-        const playlistInstance = new PlayList();
-
-        // Ensure safe access to properties
-        playlistInstance.id = initialPlaylist?.id || undefined;
-        playlistInstance.name = initialPlaylist?.name || '';
-
-        // Convert plain objects back to Asset objects if needed with safety checks
-        playlistInstance.assets = ((initialPlaylist?.assets || []) as any[]).map(asset => {
-            // Ensure asset is defined and has required properties
-            if (!asset) {
-                return null;
-            }
-
-            return {
-                id: asset.id || '',
-                filename: asset.filename || 'Unknown',
-                uri: asset.uri || '',
-                mediaType: asset.mediaType || 'photo',
-                duration: asset.duration || undefined,
-                width: asset.width || undefined,
-                height: asset.height || undefined,
-                albumId: asset.albumId || undefined,
-            } as Asset;
-        }).filter(asset => asset !== null) as Asset[]; // Remove null entries
-
-        return playlistInstance;
-    });
+    const [playlist, setPlaylist] = useState<PlayList>(new PlayList());
 
     const [editNameDialogVisible, setEditNameDialogVisible] = useState(false);
-    const [newName, setNewName] = useState(playlist.name || '');
+    const [newName, setNewName] = useState(playlist?.name || '');
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(isNew);
     const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -94,28 +65,44 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
     const [successDialogVisible, setSuccessDialogVisible] = useState(false);
     const [errorDialogVisible, setErrorDialogVisible] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
+    const [isNavigatingAway, setIsNavigatingAway] = useState(false);
+    const [playlistLoaded, setPlaylistLoaded] = useState(false);
 
     const styles = useStyles(theme);
-
+    useEffect(() => {
+        (async () => {
+            const initialPlaylist = await getPlayList(playlistId);
+            if (initialPlaylist) {
+                setPlaylist(initialPlaylist);
+            }
+            setPlaylistLoaded(true);
+        })();
+    }, []);
     /**
      * Save playlist to database
      */
     const savePlaylist = useCallback(async () => {
-        if (!hasChanges) return;
-
+        if (!hasChanges || !playlist) return;
         try {
             setSaving(true);
             await insertOrUpdatePlayList(playlist);
             setHasChanges(false);
-            setSuccessDialogVisible(true);
+
+            // Call the callback to refresh playlists list
+            if (onPlaylistSaved) {
+                onPlaylistSaved();
+            }
+
+            return true; // Indicate success
         } catch (error) {
             console.error('Failed to save playlist:', error);
             setErrorMessage(i18n.t('failed_to_save_playlist'));
             setErrorDialogVisible(true);
+            return false; // Indicate failure
         } finally {
             setSaving(false);
         }
-    }, [playlist, hasChanges, i18n]);
+    }, [playlist, hasChanges, i18n, onPlaylistSaved]);
 
     /**
      * Handle back navigation with unsaved changes
@@ -133,7 +120,12 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
      */
     const discardChangesAndGoBack = useCallback(() => {
         setUnsavedChangesDialogVisible(false);
-        navigation.goBack();
+        setIsNavigatingAway(true);
+        setHasChanges(false);
+        // Use setTimeout to ensure state updates before navigation
+        setTimeout(() => {
+            navigation.goBack();
+        }, 0);
     }, [navigation]);
 
     /**
@@ -141,8 +133,19 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
      */
     const saveChangesAndGoBack = useCallback(async () => {
         setUnsavedChangesDialogVisible(false);
-        await savePlaylist();
-        navigation.goBack();
+        setIsNavigatingAway(true);
+
+        const success = await savePlaylist();
+
+        if (success) {
+            setHasChanges(false);
+            // Use setTimeout to ensure state updates before navigation
+            setTimeout(() => {
+                navigation.goBack();
+            }, 0);
+        } else {
+            setIsNavigatingAway(false);
+        }
     }, [savePlaylist, navigation]);
 
     /**
@@ -150,7 +153,7 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
      */
     const handleUpdateName = useCallback(() => {
         const trimmedName = newName?.trim();
-        if (trimmedName && trimmedName !== playlist.name) {
+        if (trimmedName && trimmedName !== playlist?.name) {
             setPlaylist(prev => ({
                 ...prev,
                 name: trimmedName,
@@ -159,6 +162,16 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
         }
         setEditNameDialogVisible(false);
     }, [newName, playlist.name]);
+
+    /**
+     * Save playlist manually (from FAB or menu)
+     */
+    const handleManualSave = useCallback(async () => {
+        const success = await savePlaylist();
+        if (success) {
+            setSuccessDialogVisible(true);
+        }
+    }, [savePlaylist]);
 
     /**
      * Remove asset from playlist
@@ -173,24 +186,58 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
     }, []);
 
     /**
+     * Handle drag end - update playlist with new order
+     */
+    const handleDragEnd = useCallback(({data}: { data: Asset[] }) => {
+        setPlaylist(prev => ({
+            ...prev,
+            assets: data,
+        }));
+        setHasChanges(true);
+    }, []);
+
+    const assetsSelected = (data: Asset[]) => {
+        setPlaylist(prev => ({
+            ...prev,
+            assets: [...(prev.assets ?? []), ...data]
+        }));
+        setHasChanges(true);
+    }
+
+    /**
      * Navigate to media selector with callback
      */
     const handleAddMedia = useCallback(() => {
-        // Create a callback function that will handle the selected assets
-        const onSelectAssets = (selectedAssets: Asset[]) => {
+
+        // Store the callback in a temporary variable accessible by MediaSelector
+        (global as any).mediaSelector_onSelectAssets = (selectedAssets: Asset[]) => {
+
+            // Ensure assets have all required properties
+            const validatedAssets = selectedAssets.map(asset => ({
+                id: asset.id || `temp-${Math.random()}`,
+                filename: asset.filename || 'Unknown',
+                uri: asset.uri || '',
+                mediaType: asset.mediaType || 'photo',
+                duration: asset.duration,
+                width: asset.width,
+                height: asset.height,
+                albumId: asset.albumId,
+            })) as Asset[];
+
             setPlaylist(prev => ({
                 ...prev,
-                assets: [...(prev.assets || []), ...selectedAssets],
+                assets: [...(prev.assets || []), ...validatedAssets],
             }));
             setHasChanges(true);
         };
 
         (navigation as any).navigate('MediaSelector', {
-            onSelectAssets,
-            excludeAssets: playlist.assets || [],
+            onSelectAssets: assetsSelected,
             allowMultiple: true,
+            playlistName: playlist.name,
+            playlistId: playlistId
         });
-    }, [navigation, playlist.assets]);
+    }, [navigation, playlist.assets, playlist.name]);
 
     /**
      * Format duration for display
@@ -217,86 +264,98 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
     }, []);
 
     /**
-     * Render asset item
+     * Render asset item with drag handle
      */
-    const renderAssetItem = useCallback(({item, index}: { item: Asset; index: number }) => {
+    const renderAssetItem = useCallback(({item, drag, isActive}: RenderItemParams<Asset>) => {
+        // Ensure all values are safe for rendering
+        const safeFilename = item.filename || 'Unknown';
+        const safeMediaType = item.mediaType || 'photo';
+        const safeDuration = item.duration;
+
         return (
-            <Card style={styles.assetCard} key={item.id}>
-                <View style={styles.assetContent}>
-                    {/* Drag handle */}
-                    <View style={styles.dragHandle}>
-                        <IconButton
-                            icon="drag"
-                            size={20}
-                            iconColor={theme.colors.onSurfaceVariant}
-                        />
-                    </View>
-
-                    {/* Asset thumbnail */}
-                    <View style={styles.assetThumbnail}>
-                        {item.uri ? (
-                            <Image
-                                source={{uri: item.uri}}
-                                style={styles.thumbnailImage}
-                                resizeMode="cover"
+            <ScaleDecorator>
+                <Card style={[styles.assetCard, isActive && styles.assetCardActive]}>
+                    <View style={styles.assetContent}>
+                        {/* Drag handle */}
+                        <TouchableOpacity
+                            onLongPress={drag}
+                            disabled={isActive}
+                            style={styles.dragHandle}
+                        >
+                            <IconButton
+                                icon="drag"
+                                size={20}
+                                iconColor={theme.colors.onSurfaceVariant}
                             />
-                        ) : (
-                            <Surface style={styles.thumbnailPlaceholder}>
-                                <IconButton
-                                    icon={getMediaIcon(item)}
-                                    size={24}
-                                    iconColor={theme.colors.onSurfaceVariant}
-                                />
-                            </Surface>
-                        )}
-                    </View>
+                        </TouchableOpacity>
 
-                    {/* Asset info */}
-                    <View style={styles.assetInfo}>
-                        <Text variant="bodyMedium" numberOfLines={1}>
-                            {item.filename}
-                        </Text>
-                        <View style={styles.assetMeta}>
-                            <Chip
-                                mode="outlined"
-                                compact
-                                icon={getMediaIcon(item)}
-                                style={styles.typeChip}
-                            >
-                                {item.mediaType}
-                            </Chip>
-                            {item.duration && (
-                                <Text variant="bodySmall" style={styles.duration}>
-                                    {formatDuration(item.duration)}
-                                </Text>
+                        {/* Asset thumbnail */}
+                        <View style={styles.assetThumbnail}>
+                            {item.uri ? (
+                                <Image
+                                    source={{uri: item.uri}}
+                                    style={styles.thumbnailImage}
+                                    resizeMode="cover"
+                                />
+                            ) : (
+                                <Surface style={styles.thumbnailPlaceholder}>
+                                    <IconButton
+                                        icon={getMediaIcon(item)}
+                                        size={24}
+                                        iconColor={theme.colors.onSurfaceVariant}
+                                    />
+                                </Surface>
                             )}
                         </View>
-                    </View>
 
-                    {/* Asset actions */}
-                    <Menu
-                        visible={assetMenuVisible && selectedAsset?.id === item.id}
-                        onDismiss={() => setAssetMenuVisible(false)}
-                        anchor={
-                            <IconButton
-                                icon="dots-vertical"
-                                size={20}
-                                onPress={() => {
-                                    setSelectedAsset(item);
-                                    setAssetMenuVisible(true);
-                                }}
+                        {/* Asset info */}
+                        <View style={styles.assetInfo}>
+                            <Text variant="bodyMedium" numberOfLines={1}>
+                                {safeFilename}
+                            </Text>
+                            <View style={styles.assetMeta}>
+                                <Chip
+                                    mode="outlined"
+                                    compact
+                                    icon={getMediaIcon(item)}
+                                    style={styles.typeChip}
+                                    textStyle={styles.chipTextStyle}
+                                >
+                                    {safeMediaType}
+                                </Chip>
+                                {safeDuration ? (
+                                    <Text variant="bodySmall" style={styles.duration}>
+                                        {formatDuration(safeDuration)}
+                                    </Text>
+                                ) : null}
+                            </View>
+                        </View>
+
+                        {/* Asset actions */}
+                        <Menu
+                            visible={assetMenuVisible && selectedAsset?.id === item.id}
+                            onDismiss={() => setAssetMenuVisible(false)}
+                            anchor={
+                                <IconButton
+                                    icon="dots-vertical"
+                                    size={20}
+                                    onPress={() => {
+                                        setSelectedAsset(item);
+                                        setAssetMenuVisible(true);
+                                    }}
+                                />
+                            }
+                        >
+                            <Menu.Item
+                                onPress={() => handleRemoveAsset(item)}
+                                title={i18n.t('remove')}
+                                leadingIcon="delete"
+                                titleStyle={{color: theme.colors.error}}
                             />
-                        }
-                    >
-                        <Menu.Item
-                            onPress={() => handleRemoveAsset(item)}
-                            title={i18n.t('remove')}
-                            leadingIcon="delete"
-                            titleStyle={{color: theme.colors.error}}
-                        />
-                    </Menu>
-                </View>
-            </Card>
+                        </Menu>
+                    </View>
+                </Card>
+            </ScaleDecorator>
         );
     }, [
         theme.colors,
@@ -339,26 +398,45 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
     }, 0) || 0;
 
     // Override back button behavior
-    React.useEffect(() => {
-        const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-            if (!hasChanges) {
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
+            // Allow navigation if we're intentionally navigating away
+            if (isNavigatingAway || !hasChanges) {
                 return;
             }
 
+            // Prevent default behavior
             e.preventDefault();
+
+            // Show unsaved changes dialog
             setUnsavedChangesDialogVisible(true);
         });
 
         return unsubscribe;
-    }, [navigation, hasChanges]);
+    }, [navigation, hasChanges, isNavigatingAway]);
 
+    if (!playlistLoaded) {
+        return (
+            <PaperProvider theme={theme}>
+                <View style={{
+                    flex: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 20,
+                    backgroundColor: theme.colors.background
+                }}>
+                    <ActivityIndicator size="large"/>
+                </View>
+            </PaperProvider>
+        )
+    }
     return (
-        <View style={styles.container}>
+        <GestureHandlerRootView style={styles.flexContainer}>
             {/* Playlist Stats */}
             <Surface style={styles.statsContainer}>
                 <View style={styles.statsRow}>
                     <Text variant="headlineSmall">
-                        {playlist.name || i18n.t('playlist_name')}
+                        {playlist.name || i18n.t('untitled_playlist')}
                     </Text>
                     <IconButton
                         icon="pencil"
@@ -382,12 +460,14 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
                 </View>
             </Surface>
 
-            {/* Assets List */}
+            {/* Assets List with Drag and Drop */}
             {playlist.assets && playlist.assets.length > 0 ? (
-                <FlatList
+                <DraggableFlatList
                     data={playlist.assets}
                     renderItem={renderAssetItem}
-                    keyExtractor={(item: Asset) => item.id || `asset-${Math.random()}`}
+                    keyExtractor={(item: Asset, index: number) => item.id ? `${item.id}` : `asset-${index}`}
+                    onDragEnd={handleDragEnd}
+                    containerStyle={styles.listContainer}
                     contentContainerStyle={styles.assetsList}
                 />
             ) : (
@@ -395,12 +475,13 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
             )}
 
             {/* Add Media FAB */}
-            <FAB
-                icon="plus"
-                style={[styles.fab, {bottom: Math.max(insets.bottom, 16) + 16}]}
-                onPress={handleAddMedia}
-                label={i18n.t('add_media')}
-            />
+            {playlist.assets && playlist.assets.length > 0 &&
+                <FAB
+                    icon="plus"
+                    style={[styles.fab, {bottom: Math.max(insets.bottom, 16) + 16}]}
+                    onPress={handleAddMedia}
+                    label={i18n.t('add_media')}
+                />}
 
             {/* Loading Overlay */}
             {saving && (
@@ -522,13 +603,13 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = () => {
                     </Dialog.Actions>
                 </Dialog>
             </Portal>
-        </View>
+        </GestureHandlerRootView>
     );
 };
 
 const useStyles = (theme: any) =>
     StyleSheet.create({
-        container: {
+        flexContainer: {
             flex: 1,
             backgroundColor: theme.colors.background,
         },
@@ -542,12 +623,20 @@ const useStyles = (theme: any) =>
             justifyContent: 'space-between',
             alignItems: 'center',
         },
+        listContainer: {
+            flex: 1,
+        },
         assetsList: {
             padding: 16,
+            flexGrow: 1,
         },
         assetCard: {
             margin: 8,
             elevation: 2,
+        },
+        assetCardActive: {
+            elevation: 8,
+            opacity: 0.9,
         },
         assetContent: {
             flexDirection: 'row',
@@ -586,7 +675,13 @@ const useStyles = (theme: any) =>
             gap: 8,
         },
         typeChip: {
-            height: 24,
+            height: 28,
+        },
+        chipTextStyle: {
+            fontSize: 11,
+            lineHeight: 14,
+            marginVertical: 0,
+            paddingVertical: 0,
         },
         duration: {
             color: theme.colors.onSurfaceVariant,
