@@ -781,6 +781,7 @@ const MainContent: React.FC = () => {
                     <Dialog.Title>{i18n.t('change_theme')}</Dialog.Title>
                     <Dialog.Content>
                         <RadioButton.Group onValueChange={value => setTheme(value)} value={themeType}>
+                            <RadioButton.Item label={i18n.t('theme_type.light')} value="light"/>
                             <RadioButton.Item label={i18n.t('theme_type.dark')} value="dark"/>
                             <RadioButton.Item label={i18n.t('theme_type.day_night')} value="auto"/>
                         </RadioButton.Group>
