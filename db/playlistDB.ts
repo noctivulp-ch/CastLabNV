@@ -10,7 +10,7 @@ const db = drizzle(expo);
 
 /**
  * Insert or Update a playlist in database
- * This methode is exported and has its own logic for inserting {@link insertPlayList} or updating {@link updatePlayList}
+ * This method is exported and has its own logic for inserting {@link insertPlayList} or updating {@link updatePlayList}
  * @param playlist {PlayList} - PlayList to store or update in db
  * @return id[]:number|null - the id of the inserted or updated element
  */
@@ -18,17 +18,22 @@ export const insertOrUpdatePlayList = async (playlist: PlayList) => {
     if (!playlist?.name) {
         return null;
     }
-    const count = await db.$count(playlistsTable, eq(playlistsTable.name, playlist.name));
-    if (count > 0) {
+    if (playlist.id) {
+        // If playlist has an ID, it's an update
         return await updatePlayList(playlist);
     } else {
-        return insertPlayList(playlist);
+        // If no ID, check if a playlist with this name already exists
+        const count = await db.$count(playlistsTable, eq(playlistsTable.name, playlist.name));
+        if (count > 0) {
+            throw new Error(`A playlist with the name "${playlist.name}" already exists`);
+        }
+        return await insertPlayList(playlist);
     }
 }
 
 /**
  * Insert a playlist in database
- * This methode is called by {@link insertOrUpdatePlayList}
+ * This method is called by {@link insertOrUpdatePlayList}
  * @param playlist {PlayList} - PlayList to store or update in db
  * @return id[]:number - the id of the inserted element
  */
@@ -48,7 +53,7 @@ const insertPlayList = async (playlist: PlayList) => {
 
 /**
  * Update a playlist in database
- * This methode is called by {@link insertOrUpdatePlayList}
+ * This method is called by {@link insertOrUpdatePlayList}
  * @param playList {PlayList} - PlayList to store or update in db
  * @return id[]:number - the id of the updated element
  */
@@ -94,4 +99,25 @@ export const getAllPlayLists = async (): Promise<PlayList[]> => {
         console.error(err);
     }
     return playLists;
+}
+
+/**
+ * Returns a single playlist in database
+ */
+export const getPlayList = async (playlist_id: number): Promise<PlayList | null> => {
+    let playList: PlayList | null = null;
+    try {
+        let results = await db.select().from(playlistsTable).where(eq(playlistsTable.id, playlist_id)).limit(1);
+        const playlistDB = results[0];
+        playList = {
+            id: playlistDB.id,
+            name: playlistDB.name,
+            assets: playlistDB?.assets ? JSON.parse(playlistDB.assets as string) : null,
+            created_at: playlistDB.created_at,
+            updated_at: playlistDB.updated_at,
+        };
+    } catch (err) {
+        console.error(err);
+    }
+    return playList;
 }

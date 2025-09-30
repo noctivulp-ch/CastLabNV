@@ -47,6 +47,7 @@ export class CastManager extends EventEmitter {
     private xmlParser = new XMLParser();
     private soapCache = new Map<string, CacheEntry>(); // SOAP response cache
     private currentPollInterval = CastConfig.DEFAULT_POLL_INTERVAL;
+    private heartbeatInterval: NodeJS.Timeout | null = null; // Heartbeat to maintain the connection
 
     constructor() {
         super();
@@ -181,7 +182,6 @@ export class CastManager extends EventEmitter {
         }
     }
 
-
     /**
      * Stop media playback but keep device connected
      */
@@ -190,6 +190,8 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+        // Stop heartbeat when stopping playback
+        this.stopHeartbeat();
         // Execute stop command in background with proper error handling
         this.dlnaStop().then(() => {
             this.currentMediaUri = null;
@@ -221,6 +223,8 @@ export class CastManager extends EventEmitter {
         }
 
         try {
+            // Stop heartbeat and polling immediately
+            this.stopHeartbeat();
             // Stop polling immediately
             this.stopPolling();
             // First stop any current playback
@@ -243,8 +247,11 @@ export class CastManager extends EventEmitter {
      */
     async castMedia(mediaInfo: MediaInfo): Promise<void> {
         if (!this.currentDevice) {
+            // Emit error only once by stopping any background tasks first
+            this.stopHeartbeat();
+            this.stopPolling();
             this.emit('error', this.i18n.t('error.noDevice'));
-            return;
+            throw new Error(this.i18n.t('error.noDevice'));
         }
 
         // Validate media info
@@ -270,7 +277,8 @@ export class CastManager extends EventEmitter {
             const didlMetadata = this.buildDIDLMetadata(mediaInfo);
             await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
             await this.dlnaPlay();
-
+            // Start heartbeat to maintain connection
+            this.startHeartbeat();
             // Reset progress to 0 when starting new media
             this.emit('progressChanged', 0);
 
@@ -302,7 +310,6 @@ export class CastManager extends EventEmitter {
             return 0;
         }
     }
-
 
     /**
      * Seeks to a specific position in the media.
@@ -397,14 +404,16 @@ export class CastManager extends EventEmitter {
         }
     }
 
-
     /**
      * Retrieves the current playback status.
      * @returns A promise resolving to the playback state.
      */
     async getStatus(): Promise<PlaybackState> {
         if (!this.currentDevice) {
-            this.emit('error', this.i18n.t('error.noDevice'));
+            // Stop background tasks silently
+            this.stopHeartbeat();
+            this.stopPolling();
+            // Return default state without emitting error (polling will handle it)
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
 
@@ -440,6 +449,7 @@ export class CastManager extends EventEmitter {
      */
     public cleanup(): void {
         this.stopSearch();
+        this.stopHeartbeat();
         this.disconnect();
         this.soapCache.clear();
         this.devices.clear();
@@ -483,7 +493,6 @@ export class CastManager extends EventEmitter {
 
     }
 
-
     /**
      * Non-blocking pause method - returns immediately, command executes in background
      */
@@ -519,6 +528,36 @@ export class CastManager extends EventEmitter {
             // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.pause', {message: err.message}));
         });
+    }
+
+    /**
+     * Start heartbeat to maintain connection during media playback
+     */
+    private startHeartbeat(): void {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+
+        this.heartbeatInterval = setInterval(async () => {
+            if (this.currentDevice && this.currentMediaUri) {
+                try {
+                    // Lightweight ping to maintain connection
+                    await this.dlnaGetStatus();
+                } catch (error) {
+                    console.warn('Heartbeat failed:', error);
+                }
+            }
+        }, 30000); // Every 30 seconds during playback
+    }
+
+    /**
+     * Stop heartbeat when not needed
+     */
+    private stopHeartbeat(): void {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
     }
 
     /**
@@ -911,6 +950,14 @@ ${body}
      * @returns A promise resolving to the playback state.
      */
     private async dlnaGetStatus(): Promise<PlaybackState> {
+        // Check device before doing anything
+        if (!this.currentDevice) {
+            // Stop heartbeat if it's running without a device
+            this.stopHeartbeat();
+            this.stopPolling();
+            // Return default state without emitting error
+            return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
+        }
         try {
             // Don't cache position info - we need real-time data
             // Also don't cache volume/mute during active volume changes
@@ -1010,6 +1057,10 @@ ${body}
 
         const poll = async () => {
             try {
+                if (!this.currentDevice) {
+                    this.stopPolling();
+                    return;
+                }
                 if (!await this.checkNetworkAndDevice()) {
                     this.disconnect();
                     return;
@@ -1022,8 +1073,6 @@ ${body}
             } catch (err) {
                 console.warn('Polling error:', err);
             }
-
-            // Always schedule next poll with consistent interval
             this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
         };
 
