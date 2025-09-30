@@ -1,1 +1,8 @@
-CastLab will display your albums on your device. You will be able to filter media inside and cast them to your television with  a simple tap on them.
+- Cast media (Pictures, Videos, Audios) into device through DLNA
+- Filer media
+- Create Playlists
+- Settings to automatically play next media (duration can be changed)
+- Embedded player to control cast
+- Notification player when the app is in the background
+- Remote cast of videos from Peertube and Youtube (Youtube URLs are converted to Invidious URLs, Youtube is never
+  involved)
