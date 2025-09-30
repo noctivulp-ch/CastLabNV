@@ -1073,12 +1073,7 @@ ${body}
             } catch (err) {
                 console.warn('Polling error:', err);
             }
-
-            // Only schedule next poll if polling interval still exists
-            // (it will be null if stopPolling() was called)
-            if (this.pollingInterval !== null) {
-                this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
-            }
+            this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
         };
 
         // Start first poll immediately
