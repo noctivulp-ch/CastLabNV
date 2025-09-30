@@ -1,1 +1,1 @@
-CastLab is an app that allows to cast gallery media through DLNA protocol
+CastLab: Cast your gallery media to DLNA/UPnP devices with playlist support and video extraction

@@ -15,6 +15,7 @@ interface CustomAppBarProps {
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
+    onThemeCustomizerPressed?: () => void;
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
@@ -25,7 +26,8 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 themePressed,
                                                                                 onButtonCastPressed,
                                                                                 onPlaylistsPressed,
-                                                                                onVideoExtractorPressed
+                                                                                onVideoExtractorPressed,
+                                                                                onThemeCustomizerPressed
                                                                             }) => {
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
@@ -46,6 +48,8 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         } else {
             title = i18n.t('select_media_title');
         }
+    } else if (route.name === "ThemeCustomizer") {
+        title = i18n.t('theme_customizer');
     }
 
     const {isConnected} = useCastManager();
@@ -53,19 +57,29 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     // Determine if we should hide cast and menu buttons
     const hideCastAndMenu = [
         'PlaylistEdit',
-        'MediaSelector'
+        'MediaSelector',
+        'ThemeCustomizer'
     ].includes(route.name);
 
     // Determine if we should hide only the playlists menu item
     const hidePlaylistsMenuItem = [
         'Playlists',
         'PlaylistEdit',
-        'MediaSelector'
+        'MediaSelector',
+        'ThemeCustomizer'
     ].includes(route.name);
 
     // Determine if we should hide the video extractor menu item
     const hideVideoExtractorMenuItem = [
         'VideoExtractor',
+        'PlaylistEdit',
+        'MediaSelector',
+        'ThemeCustomizer'
+    ].includes(route.name);
+
+    // Determine if we should hide the theme customizer menu item
+    const hideThemeCustomizerMenuItem = [
+        'ThemeCustomizer',
         'PlaylistEdit',
         'MediaSelector'
     ].includes(route.name);
@@ -94,6 +108,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         setMenuVisible(false);
         if (onVideoExtractorPressed) {
             onVideoExtractorPressed();
+        }
+    }
+
+    const openThemeCustomizer = () => {
+        setMenuVisible(false);
+        if (onThemeCustomizerPressed) {
+            onThemeCustomizerPressed();
         }
     }
 
@@ -135,6 +156,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                            accessibilityLabel={i18n.t('contextual_menu')}/>}>
                     <Menu.Item onPress={changeTheme} title={i18n.t('change_theme')} leadingIcon={"theme-light-dark"}
                                accessibilityLabel={i18n.t('change_theme')}/>
+
+                    {/* Theme customizer menu item */}
+                    {!hideThemeCustomizerMenuItem && (
+                        <Menu.Item onPress={openThemeCustomizer} title={i18n.t('customize_theme')}
+                                   leadingIcon={"palette"}
+                                   accessibilityLabel={i18n.t('customize_theme')}/>
+                    )}
 
                     {/* Only show playlists menu item if not in playlists-related screens */}
                     {!hidePlaylistsMenuItem && (

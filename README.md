@@ -1,20 +1,52 @@
 # CastLab
 
-An app that allows to cast gallery media through DLNA protocol
+CastLab: Cast your gallery media to DLNA/UPnP devices with playlist support and video extraction
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 [![Liberapay patrons](https://img.shields.io/liberapay/patrons/tom79?label=Liberapay&style=for-the-badge)](https://liberapay.com/tom79/donate)
 
-## Features
+## Description
 
-- Cast media (Pictures, Videos, Audios) into device through DLNA
-- Filer media
-- Create Playlists
-- Settings to automatically play next media (duration can be changed)
-- Embedded player to control cast
-- Notification player when the app is in the background
-- Remote cast of videos from Peertube and Youtube (Youtube URLs are converted to Invidious URLs, Youtube is never
-  involved)
+CastLab is a comprehensive media casting application that enables you to stream your local media and online videos to
+DLNA/UPnP compatible devices.
+
+Key Features:
+
+- Media Casting
+    - Cast photos, videos, and audio from your device gallery
+    - Support for DLNA/UPnP protocol with automatic device discovery
+    - Built-in HTTP server for seamless media streaming
+
+- Media Management
+    - Browse media by albums with filtering options (date range, media type)
+    - Create and manage custom playlists
+    - Organize media with intuitive selection and editing tools
+
+- Playback Control
+    - Integrated player controller with play, pause, stop, seek, and volume controls
+    - Autoplay support with automatic advancement to next media
+    - Compact mode for unobtrusive playback monitoring
+    - Background playback with notification controls
+    - Keep device awake during casting sessions
+
+- Video Extraction
+    - Extract videos from web pages (HTML parsing)
+    - Remote casting from PeerTube and YouTube
+    - YouTube URLs automatically converted to Invidious instances (privacy-friendly, no direct YouTube involvement)
+    - Configurable Invidious instance settings
+    - Extraction history tracking
+
+- Customization
+    - Multiple theme modes: Light, Dark, Auto (Day/Night), and Custom
+    - Advanced theme customizer with preset themes
+    - Customize individual color elements (primary, secondary, background, surface, etc.)
+    - Material Design 3 (Material You) support
+
+- User Experience
+    - Intuitive navigation with contextual menus
+    - Toast notifications for operation feedback
+    - Persistent theme and playlist settings
+    - SQLite database for reliable data storage
 
 ## Screenshots
 

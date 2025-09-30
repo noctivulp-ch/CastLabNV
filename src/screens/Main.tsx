@@ -37,6 +37,7 @@ import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
 import VideoExtractorScreen from "./VideoExtractorScreen";
 import AboutScreen from "./AboutScreen";
+import ThemeCustomizerScreen from "./ThemeCustomizerScreen";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -73,6 +74,7 @@ export type RootStackParamList = {
         playlistId?: number;
     };
     VideoExtractor: { playerHeight?: number };
+    ThemeCustomizer: {};
     PictureAlbums: any;
     VideoAlbums: any;
     About: undefined;
@@ -227,6 +229,13 @@ const MainContent: React.FC = () => {
                 console.error('Main: Failed to load more assets:', error);
             }
         }
+    }, []);
+
+    /**
+     * Handle theme customizer button press - navigate to theme customizer screen
+     */
+    const handleThemeCustomizerPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
+        navigation.navigate('ThemeCustomizer', {});
     }, []);
 
     /**
@@ -523,6 +532,7 @@ const MainContent: React.FC = () => {
                             onButtonCastPressed={buttonCastPressed}
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
+                            onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}
                             castManager={castManager}
                             themePressed={displayThemePicker}
                         />,
@@ -697,6 +707,20 @@ const MainContent: React.FC = () => {
                         }}
                         component={AboutScreen}
                     />
+                    <Stack.Screen
+                        name="ThemeCustomizer"
+                        options={{
+                            headerShown: true,
+                            title: i18n.t('theme_customizer'),
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                        }}
+                    >
+                        {(props) => <ThemeCustomizerScreen {...props} />}
+                    </Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
 
@@ -738,6 +762,7 @@ const MainContent: React.FC = () => {
                             <RadioButton.Item label={i18n.t('theme_type.light')} value="light"/>
                             <RadioButton.Item label={i18n.t('theme_type.dark')} value="dark"/>
                             <RadioButton.Item label={i18n.t('theme_type.day_night')} value="auto"/>
+                            <RadioButton.Item label={i18n.t('theme_type.custom')} value="custom"/>
                         </RadioButton.Group>
                     </Dialog.Content>
                     <Dialog.Actions>
@@ -747,6 +772,7 @@ const MainContent: React.FC = () => {
                     </Dialog.Actions>
                 </Dialog>
             </Portal>
+
         </PaperProvider>
     );
 };
