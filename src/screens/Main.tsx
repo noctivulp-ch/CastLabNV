@@ -36,6 +36,7 @@ import castReducer, {setCurrentAsset} from "../store/slice/castSlice";
 import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
 import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
+import VideoExtractorScreen from "./VideoExtractorScreen";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -71,6 +72,7 @@ export type RootStackParamList = {
         playlistName?: string;
         playlistId?: number;
     };
+    VideoExtractor: { playerHeight?: number };
     PictureAlbums: any;
     VideoAlbums: any;
 }
@@ -339,6 +341,15 @@ const MainContent: React.FC = () => {
         }
     }, [playlistsScreenRef]);
 
+
+    /**
+     * Handle video extractor button press - navigate to video extractor screen
+     */
+    const handleVideoExtractorPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
+        navigation.navigate('VideoExtractor', {});
+    }, []);
+
+
     /**
      * Delete all files from the server directory
      */
@@ -516,6 +527,7 @@ const MainContent: React.FC = () => {
                             {...props}
                             onButtonCastPressed={buttonCastPressed}
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
+                            onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             castManager={castManager}
                             infoPress={displayAppInfo}
                             themePressed={displayThemePicker}
@@ -656,6 +668,28 @@ const MainContent: React.FC = () => {
                             presentation: 'modal',
                         }}
                     >{(props: any) => <MediaSelectorScreen {...props} />}</Stack.Screen>
+
+                    {/* Video Extractor screen */}
+                    <Stack.Screen
+                        name="VideoExtractor"
+                        options={{
+                            headerShown: true,
+                            title: i18n.t('video_extractor'),
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                        }}
+                    >
+                        {(props) => (
+                            <VideoExtractorScreen
+                                {...props}
+                                playerHeight={playerHeight}
+                                onScrollDirectionChange={handleScrollDirectionChange}
+                            />
+                        )}
+                    </Stack.Screen>
                 </Stack.Navigator>
             </NavigationContainer>
 

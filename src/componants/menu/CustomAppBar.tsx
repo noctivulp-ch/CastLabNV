@@ -15,6 +15,7 @@ interface CustomAppBarProps {
     infoPress: () => void;
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
+    onVideoExtractorPressed?: () => void;
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
@@ -25,7 +26,8 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 infoPress,
                                                                                 themePressed,
                                                                                 onButtonCastPressed,
-                                                                                onPlaylistsPressed
+                                                                                onPlaylistsPressed,
+                                                                                onVideoExtractorPressed
                                                                             }) => {
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
@@ -63,6 +65,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         'MediaSelector'
     ].includes(route.name);
 
+    // Determine if we should hide the video extractor menu item
+    const hideVideoExtractorMenuItem = [
+        'VideoExtractor',
+        'PlaylistEdit',
+        'MediaSelector'
+    ].includes(route.name);
+
     useEffect(() => {
         if (isConnected) {
             setCastIcon("cast-connected");
@@ -80,6 +89,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         setMenuVisible(false);
         if (onPlaylistsPressed) {
             onPlaylistsPressed();
+        }
+    }
+
+    const openVideoExtractor = () => {
+        setMenuVisible(false);
+        if (onVideoExtractorPressed) {
+            onVideoExtractorPressed();
         }
     }
 
@@ -126,6 +142,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                     {!hidePlaylistsMenuItem && (
                         <Menu.Item onPress={openPlaylists} title={i18n.t('playlists')} leadingIcon={"playlist-music"}
                                    accessibilityLabel={i18n.t('playlists')}/>
+                    )}
+
+                    {/* Only show video extractor menu item if not in video extractor screen */}
+                    {!hideVideoExtractorMenuItem && (
+                        <Menu.Item onPress={openVideoExtractor} title={i18n.t('video_extractor')}
+                                   leadingIcon={"web"}
+                                   accessibilityLabel={i18n.t('video_extractor')}/>
                     )}
 
                     <Menu.Item onPress={openAbout} title={i18n.t('about')}

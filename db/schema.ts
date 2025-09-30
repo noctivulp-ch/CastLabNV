@@ -7,3 +7,19 @@ export const playlistsTable = sqliteTable("playlists_table", {
     created_at: integer({mode: 'timestamp'}),
     updated_at: integer({mode: 'timestamp'})
 });
+
+/**
+ * Table for storing video extraction history
+ */
+export const extractedVideosTable = sqliteTable("extracted_videos_table", {
+    id: int().primaryKey({autoIncrement: true}),
+    video_id: text().notNull(), // Unique ID from ExtractedVideo
+    url: text().notNull(), // Video URL
+    title: text().notNull(), // Video title
+    thumbnail: text(), // Optional thumbnail URL
+    format: text(), // Video format (e.g., "720p", "MP4")
+    source: text().notNull(), // Source type: 'video-tag' | 'direct-link' | 'data-attribute'
+    source_url: text().notNull(), // Original webpage URL
+    page_title: text(), // Original page title
+    extracted_at: integer({mode: 'timestamp'}).notNull(), // When extraction happened
+});
