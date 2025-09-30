@@ -57,7 +57,7 @@ An app that allows to cast gallery media through DLNA protocol
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/19.png" width="250"/>
 &nbsp;&nbsp;
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/20.png" width="250"/>
-&nbsp;&nbsp;
+
 ## Build the app
 
 ### System requirements:
