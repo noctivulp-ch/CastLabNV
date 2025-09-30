@@ -12,7 +12,6 @@ import {useCastManager} from "../../contexts/castManager-context";
 interface CustomAppBarProps {
     castManager: CastManager;
     onButtonCastPressed?: () => Promise<void>;
-    infoPress: () => void;
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
@@ -23,7 +22,6 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 navigation,
                                                                                 route,
                                                                                 options,
-                                                                                infoPress,
                                                                                 themePressed,
                                                                                 onButtonCastPressed,
                                                                                 onPlaylistsPressed,
@@ -101,7 +99,7 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
 
     const openAbout = () => {
         setMenuVisible(false);
-        infoPress();
+        navigation.navigate('About');
     }
 
     const showMenu = () => {

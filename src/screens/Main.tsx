@@ -1,10 +1,10 @@
-import {Button, Dialog, PaperProvider, Portal, RadioButton, Text} from "react-native-paper";
+import {Button, Dialog, PaperProvider, Portal, RadioButton} from "react-native-paper";
 import {NavigationContainer, NavigationProp} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
 import {combineReducers, configureStore} from "@reduxjs/toolkit";
-import {Appearance, GestureResponderEvent, Linking, Platform} from "react-native";
+import {Appearance, GestureResponderEvent, Platform} from "react-native";
 import {SETTINGS_THEME} from "../constants/AsyncStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {StatusBar} from "expo-status-bar";
@@ -27,7 +27,6 @@ import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
 import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
-import app from "../../app.json";
 import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
@@ -37,6 +36,7 @@ import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
 import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
 import VideoExtractorScreen from "./VideoExtractorScreen";
+import AboutScreen from "./AboutScreen";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -75,6 +75,7 @@ export type RootStackParamList = {
     VideoExtractor: { playerHeight?: number };
     PictureAlbums: any;
     VideoAlbums: any;
+    About: undefined;
 }
 
 const isIOS = Platform.OS === 'ios';
@@ -363,12 +364,6 @@ const MainContent: React.FC = () => {
         }
     };
 
-    /**
-     * Show app information dialog
-     */
-    const displayAppInfo = () => {
-        setAboutDialogVisible(true);
-    }
 
     /**
      * Show theme picker dialog
@@ -529,7 +524,6 @@ const MainContent: React.FC = () => {
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             castManager={castManager}
-                            infoPress={displayAppInfo}
                             themePressed={displayThemePicker}
                         />,
                     })}
@@ -690,6 +684,19 @@ const MainContent: React.FC = () => {
                             />
                         )}
                     </Stack.Screen>
+                    <Stack.Screen
+                        name="About"
+                        options={{
+                            headerShown: true,
+                            title: i18n.t('about'),
+                            headerStyle: {
+                                backgroundColor: theme.colors.surface,
+                            },
+                            headerTintColor: theme.colors.onSurface,
+                            headerShadowVisible: false,
+                        }}
+                        component={AboutScreen}
+                    />
                 </Stack.Navigator>
             </NavigationContainer>
 
@@ -722,59 +729,6 @@ const MainContent: React.FC = () => {
                 onLoadMoreAssets={handleLoadMoreAssets}
                 onToggleCompactMode={handleToggleCompactMode}
             />
-
-            {/* About dialog with enhanced information */}
-            <Portal>
-                <Dialog visible={aboutDialogVisible} onDismiss={() => setAboutDialogVisible(false)}>
-                    <Dialog.Content style={{alignItems: "center"}}>
-                        <Text variant="titleLarge">CastLab</Text>
-                        <Text variant="labelLarge" style={{marginTop: 10}}>
-                            {i18n.t('version', {version: app.expo.version})}
-                        </Text>
-                        <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center'}}>
-                            {i18n.t('app_description')}
-                        </Text>
-                        <Text variant="bodyLarge" style={{marginTop: 20}}>
-                            {i18n.t('source_code')}
-                        </Text>
-                        <Text
-                            onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab')}
-                            style={{marginTop: 10, color: theme.colors.primary}}
-                        >
-                            https://codeberg.org/tom79/CastLab
-                        </Text>
-                        <Text variant="bodyLarge" style={{marginTop: 20}}>
-                            {i18n.t('report_bugs')}
-                        </Text>
-                        <Text
-                            onPress={() => Linking.openURL('https://codeberg.org/tom79/CastLab/issues')}
-                            style={{marginTop: 10, color: theme.colors.primary}}
-                        >
-                            https://codeberg.org/tom79/CastLab/issues
-                        </Text>
-                        <Text variant="bodyLarge" style={{marginTop: 20}}>
-                            {i18n.t('donations')}
-                        </Text>
-                        <Text
-                            onPress={() => Linking.openURL('https://fedilab.app/page/donations/')}
-                            style={{marginTop: 10, color: theme.colors.primary}}
-                        >
-                            https://fedilab.app/page/donations/
-                        </Text>
-
-                        {/* Autoplay feature highlight */}
-                        <Text variant="bodyMedium" style={{marginTop: 20, textAlign: 'center', fontStyle: 'italic'}}>
-                            {i18n.t('autoplay_feature_highlight')}
-                        </Text>
-                    </Dialog.Content>
-                    <Dialog.Actions>
-                        <Button onPress={() => setAboutDialogVisible(false)}>
-                            {i18n.t('close')}
-                        </Button>
-                    </Dialog.Actions>
-                </Dialog>
-            </Portal>
-
             {/* Theme selection dialog */}
             <Portal>
                 <Dialog visible={themeDialogVisible} onDismiss={() => setThemeDialogVisible(false)}>
