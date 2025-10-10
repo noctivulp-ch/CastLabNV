@@ -3,6 +3,7 @@
 CastLab: Cast your gallery media to DLNA/UPnP devices with playlist support and video extraction
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
+[![Weblate project translated](https://img.shields.io/weblate/progress/castlab?server=https%3A%2F%2Fhosted.weblate.org&style=for-the-badge)](https://hosted.weblate.org/engage/castlab/)
 [![Liberapay patrons](https://img.shields.io/liberapay/patrons/tom79?label=Liberapay&style=for-the-badge)](https://liberapay.com/tom79/donate)
 
 ## Description
