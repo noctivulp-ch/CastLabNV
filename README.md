@@ -6,6 +6,12 @@ CastLab: Cast your gallery media to DLNA/UPnP devices with playlist support and 
 [![Weblate project translated](https://img.shields.io/weblate/progress/castlab?server=https%3A%2F%2Fhosted.weblate.org&style=for-the-badge)](https://hosted.weblate.org/engage/castlab/)
 [![Liberapay patrons](https://img.shields.io/liberapay/patrons/tom79?label=Liberapay&style=for-the-badge)](https://liberapay.com/tom79/donate)
 
+[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
+     alt="Get it on F-Droid"
+     height="80">](https://f-droid.org/packages/app.fedilab.castlab/)
+
+Or download the latest [APK](https://codeberg.org/tom79/CastLab/releases/latest).
+
 ## Description
 
 CastLab is a comprehensive media casting application that enables you to stream your local media and online videos to
