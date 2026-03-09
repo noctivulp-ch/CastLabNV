@@ -48,6 +48,8 @@ export class CastManager extends EventEmitter {
     private soapCache = new Map<string, CacheEntry>(); // SOAP response cache
     private currentPollInterval = CastConfig.DEFAULT_POLL_INTERVAL;
     private heartbeatInterval: NodeJS.Timeout | null = null; // Heartbeat to maintain the connection
+    private searchRetryTimers: NodeJS.Timeout[] = []; // Timers for M-SEARCH retries
+    private pendingLocations: Set<string> = new Set(); // Track locations being processed to avoid duplicates
 
     constructor() {
         super();
@@ -100,26 +102,57 @@ export class CastManager extends EventEmitter {
 
     /**
      * Starts searching for casting devices.
+     * Sends multiple M-SEARCH messages for reliability (UDP is lossy).
      * @param duration - Duration of the search in milliseconds.
      */
     async startSearch(duration: number = CastConfig.DEFAULT_SEARCH_DURATION): Promise<void> {
-        if (this.searching) return;
+        if (this.searching) {
+            await this.stopSearch();
+        }
 
-        const state = await NetInfo.fetch();
-        if (!state.isConnected) {
+        const netState = await NetInfo.fetch();
+        if (!netState.isConnected) {
             this.emit('error', this.i18n.t('error.noNetwork'));
             return;
         }
 
         this.emit('searchStarted');
         this.searching = true;
-        this.devices.clear(); // Clear previous discoveries
+        this.devices.clear();
+        this.pendingLocations.clear();
+
+        // Resolve WiFi IP for multicast interface binding
+        let localIp: string | undefined;
+        try {
+            if (netState.type === 'wifi' && netState.details) {
+                localIp = (netState.details as any).ipAddress ?? undefined;
+            }
+        } catch (err) {
+            console.warn('Could not resolve WiFi IP for multicast:', err);
+        }
 
         // Start SSDP
         this.socket = Udp.createSocket({type: 'udp4'});
         this.socket.bind(0, () => {
-            this.socket.addMembership(MULTICAST_ADDRESS);
+            try {
+                this.socket.addMembership(MULTICAST_ADDRESS, localIp);
+            } catch (err) {
+                console.warn('addMembership with interface failed, retrying without:', err);
+                try {
+                    this.socket.addMembership(MULTICAST_ADDRESS);
+                } catch (err2) {
+                    console.warn('addMembership fallback failed:', err2);
+                }
+            }
+            // Send multiple M-SEARCH for reliability (UDP packets can be lost)
             this.sendSearchMessage();
+            this.searchRetryTimers = [];
+            this.searchRetryTimers.push(setTimeout(() => {
+                if (this.searching) this.sendSearchMessage();
+            }, 2000));
+            this.searchRetryTimers.push(setTimeout(() => {
+                if (this.searching) this.sendSearchMessage();
+            }, 5000));
         });
 
         this.socket.on('message', (msg: Buffer, rinfo: any) => {
@@ -147,14 +180,24 @@ export class CastManager extends EventEmitter {
             this.timeout = null;
         }
 
+        // Clear M-SEARCH retry timers
+        this.searchRetryTimers.forEach(t => clearTimeout(t));
+        this.searchRetryTimers = [];
+
         if (this.socket) {
             try {
                 this.socket.dropMembership(MULTICAST_ADDRESS);
             } catch (err) {
                 console.warn('Error dropping membership:', err);
             }
-            this.socket.close();
+            const socketToClose = this.socket;
             this.socket = null;
+            await new Promise<void>((resolve) => {
+                socketToClose.once?.('close', resolve);
+                socketToClose.close();
+                // Fallback timeout in case 'close' event doesn't fire
+                setTimeout(resolve, 500);
+            });
         }
 
         // Clean up listeners
@@ -711,36 +754,50 @@ export class CastManager extends EventEmitter {
      * @private
      */
     private async handleSsdpResponse(response: string, rinfo: any): Promise<void> {
+        let deviceLocation: string | undefined;
         try {
             const headers = this.parseHeaders(response);
             const st = headers['ST'];
-            const location = headers['LOCATION'];
+            deviceLocation = headers['LOCATION'];
             const usn = headers['USN']?.trim();
 
             // Validate headers and check for duplicates early
-            if (!st || !location || !usn) {
+            if (!st || !deviceLocation || !usn) {
                 console.warn('Invalid SSDP response: missing ST, LOCATION, or USN');
                 return;
             }
 
-            if (this.devices.has(usn)) return; // Skip if device already exists
+            if (this.devices.has(usn)) return;
 
-            // Only process DLNA devices
-            if (st !== DLNA_RENDERER_ST) {
+            // Skip if this location is already being processed or was already added
+            if (this.pendingLocations.has(deviceLocation)) return;
+            this.pendingLocations.add(deviceLocation);
+
+            // Accept MediaRenderer or any UPnP device (AVTransport is verified below)
+            const isRenderer = st === DLNA_RENDERER_ST;
+            const isUpnpDevice = st.includes('upnp') || st.includes('schemas-upnp-org') || st === SEARCH_TARGET_ALL;
+            if (!isRenderer && !isUpnpDevice) {
                 return;
             }
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CastConfig.DESCRIPTION_TIMEOUT);
 
-            const descRes = await fetch(location, {
-                signal: controller.signal
-            });
+            let descRes;
+            try {
+                descRes = await fetch(deviceLocation, {
+                    signal: controller.signal
+                });
+            } catch (fetchErr) {
+                this.pendingLocations.delete(deviceLocation);
+                throw fetchErr;
+            }
 
             clearTimeout(timeoutId);
 
             if (!descRes.ok) {
                 console.warn(`Failed to fetch device description: ${descRes.status}`);
+                this.pendingLocations.delete(deviceLocation);
                 return;
             }
 
@@ -749,6 +806,16 @@ export class CastManager extends EventEmitter {
 
             if (!parsed?.root?.device) {
                 console.warn('Invalid device description XML');
+                this.pendingLocations.delete(deviceLocation);
+                return;
+            }
+
+            const services = this.extractServices(parsed);
+
+            // Must have AVTransport to be a usable renderer
+            const hasAVTransport = Object.keys(services).some(s => s.includes('AVTransport'));
+            if (!hasAVTransport) {
+                this.pendingLocations.delete(deviceLocation);
                 return;
             }
 
@@ -758,19 +825,20 @@ export class CastManager extends EventEmitter {
             const device: Device = {
                 id: usn,
                 name: friendlyName,
-                location,
+                location: deviceLocation,
                 ip: rinfo.address,
                 port: rinfo.port,
-                services: this.extractServices(parsed),
+                services,
                 manufacturer: deviceInfo.manufacturer,
                 modelName: deviceInfo.modelName,
                 capabilities: this.extractCapabilities(deviceInfo),
-                iconUrl: await this.extractDeviceIcon(parsed, location),
+                iconUrl: await this.extractDeviceIcon(parsed, deviceLocation),
             };
 
             this.devices.set(usn, device);
             this.emit('deviceAdded', device);
         } catch (err) {
+            if (deviceLocation) this.pendingLocations.delete(deviceLocation);
             console.warn('Error handling SSDP response:', (err as Error).message);
         }
     }
