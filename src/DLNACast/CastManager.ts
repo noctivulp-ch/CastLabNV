@@ -8,6 +8,7 @@ import {Buffer} from 'buffer';
 import {initTranslate} from "../localization/translate";
 import {CastUtils} from './utils/CastUtils';
 import {CastConfig} from './config/CastConfig';
+import {LogService} from '../services/LogService';
 
 // Constants for SSDP discovery (from config)
 const MULTICAST_ADDRESS = CastConfig.MULTICAST_ADDRESS;
@@ -128,7 +129,7 @@ export class CastManager extends EventEmitter {
                 localIp = (netState.details as any).ipAddress ?? undefined;
             }
         } catch (err) {
-            console.warn('Could not resolve WiFi IP for multicast:', err);
+            LogService.warn('Multicast', `Could not resolve WiFi IP: ${err}`);
         }
 
         // Start SSDP
@@ -137,21 +138,23 @@ export class CastManager extends EventEmitter {
             try {
                 this.socket.addMembership(MULTICAST_ADDRESS, localIp);
             } catch (err) {
-                console.warn('addMembership with interface failed, retrying without:', err);
+                LogService.warn('Multicast', `addMembership with interface failed, retrying without: ${err}`);
                 try {
                     this.socket.addMembership(MULTICAST_ADDRESS);
                 } catch (err2) {
-                    console.warn('addMembership fallback failed:', err2);
+                    LogService.warn('Multicast', `Multicast group join failed: ${err2}`);
                 }
             }
-            // Send multiple M-SEARCH for reliability (UDP packets can be lost)
-            this.sendSearchMessage();
+            // Send multiple M-SEARCH with varied search targets for reliability
+            // Some devices only respond to specific ST values
+            LogService.info('SSDP', 'Search started, sending M-SEARCH requests');
+            this.sendSearchMessage(SEARCH_TARGET_ALL);
             this.searchRetryTimers = [];
             this.searchRetryTimers.push(setTimeout(() => {
-                if (this.searching) this.sendSearchMessage();
+                if (this.searching) this.sendSearchMessage(DLNA_RENDERER_ST);
             }, 2000));
             this.searchRetryTimers.push(setTimeout(() => {
-                if (this.searching) this.sendSearchMessage();
+                if (this.searching) this.sendSearchMessage(SEARCH_TARGET_ALL);
             }, 5000));
         });
 
@@ -188,7 +191,7 @@ export class CastManager extends EventEmitter {
             try {
                 this.socket.dropMembership(MULTICAST_ADDRESS);
             } catch (err) {
-                console.warn('Error dropping membership:', err);
+                LogService.warn('Multicast', `Failed to leave multicast group: ${err}`);
             }
             const socketToClose = this.socket;
             this.socket = null;
@@ -202,6 +205,7 @@ export class CastManager extends EventEmitter {
 
         // Clean up listeners
         this.cleanupListeners();
+        LogService.info('SSDP', `Search stopped, ${this.devices.size} device(s) found`);
         this.emit('searchStopped');
     }
 
@@ -306,7 +310,7 @@ export class CastManager extends EventEmitter {
 
         // Check if device supports this media type
         if (!CastUtils.deviceSupportsMediaType(this.currentDevice, mediaInfo.contentType || '')) {
-            console.warn(`Device may not support media type: ${mediaInfo.contentType}`);
+            LogService.warn('Cast', `Device may not support media type: ${mediaInfo.contentType}`);
         }
 
         this.currentMediaInfo = mediaInfo;
@@ -372,19 +376,19 @@ export class CastManager extends EventEmitter {
         try {
             // Validate seek position
             if (position < 0) {
-                console.warn('Seek position cannot be negative, clamping to 0');
+                LogService.warn('Seek', 'Position clamped to 0 (negative value)');
                 position = 0;
             }
 
             // Get current status for validation
             const currentStatus = await this.dlnaGetStatus();
             if (currentStatus.duration <= 0) {
-                console.warn('Cannot seek: No media duration available');
+                LogService.warn('Seek', 'Cannot seek: no media duration available');
                 return;
             }
 
             if (position > currentStatus.duration) {
-                console.warn('Seek position beyond duration, clamping to duration');
+                LogService.warn('Seek', 'Position clamped to duration (exceeded media length)');
                 position = currentStatus.duration;
             }
 
@@ -430,7 +434,7 @@ export class CastManager extends EventEmitter {
                 // Silently ignore - don't show error to user
                 return;
             } else if (errorMessage.includes('711')) {
-                console.warn('Invalid seek target');
+                LogService.warn('Seek', 'Invalid seek target (error 711)');
                 this.emit('error', this.i18n.t('error.seekPosition'));
                 return;
             }
@@ -442,7 +446,7 @@ export class CastManager extends EventEmitter {
             } catch {
             }
 
-            console.warn('Seek failed with error:', errorMessage);
+            LogService.warn('Seek', `Seek failed: ${errorMessage}`);
             this.emit('error', this.i18n.t('error.seek', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
     }
@@ -587,7 +591,7 @@ export class CastManager extends EventEmitter {
                     // Lightweight ping to maintain connection
                     await this.dlnaGetStatus();
                 } catch (error) {
-                    console.warn('Heartbeat failed:', error);
+                    LogService.warn('Heartbeat', `Heartbeat failed: ${error}`);
                 }
             }
         }, 30000); // Every 30 seconds during playback
@@ -694,7 +698,7 @@ export class CastManager extends EventEmitter {
                         if (!completed) {
                             completed = true;
                             if (timeoutId) clearTimeout(timeoutId);
-                            console.error(`SOAP fetch error for ${action}:`, (err as Error).message);
+                            LogService.error('SOAP', `Fetch error for ${action}: ${(err as Error).message}`);
                             reject(err);
                         }
                     }
@@ -711,7 +715,7 @@ export class CastManager extends EventEmitter {
 
             } catch (err) {
                 lastError = err as Error;
-                console.error(`SOAP attempt ${attempt + 1} failed for ${action}:`, lastError.message);
+                LogService.error('SOAP', `Attempt ${attempt + 1} failed for ${action}: ${lastError.message}`);
 
                 // For play/pause, don't retry - fail fast
                 if (action === 'Play' || action === 'Pause') {
@@ -726,20 +730,24 @@ export class CastManager extends EventEmitter {
             }
         }
 
-        console.error(`SOAP action ${action} FINAL FAILURE:`, lastError?.message);
+        LogService.error('SOAP', `Action ${action} failed after all retries: ${lastError?.message}`);
         throw lastError || new Error(`SOAP action ${action} failed`);
     }
 
     /**
      * Send a SSDP M-SEARCH message
      */
-    private sendSearchMessage(): void {
+    /**
+     * Send an SSDP M-SEARCH message with the given search target.
+     * @param searchTarget - UPnP search target (ST header value)
+     */
+    private sendSearchMessage(searchTarget: string = SEARCH_TARGET_ALL): void {
         const message = Buffer.from(
             `M-SEARCH * HTTP/1.1\r\n` +
             `HOST: ${MULTICAST_ADDRESS}:${SSDP_PORT}\r\n` +
             `MAN: "ssdp:discover"\r\n` +
             `MX: 3\r\n` +
-            `ST: ${SEARCH_TARGET_ALL}\r\n\r\n`
+            `ST: ${searchTarget}\r\n\r\n`
         );
 
         this.socket.send(message, 0, message.length, SSDP_PORT, MULTICAST_ADDRESS, (err: Error | null) => {
@@ -763,7 +771,7 @@ export class CastManager extends EventEmitter {
 
             // Validate headers and check for duplicates early
             if (!st || !deviceLocation || !usn) {
-                console.warn('Invalid SSDP response: missing ST, LOCATION, or USN');
+                LogService.warn('SSDP', 'Invalid response: missing ST, LOCATION, or USN headers');
                 return;
             }
 
@@ -796,7 +804,7 @@ export class CastManager extends EventEmitter {
             clearTimeout(timeoutId);
 
             if (!descRes.ok) {
-                console.warn(`Failed to fetch device description: ${descRes.status}`);
+                LogService.warn('SSDP', `Device description fetch failed with HTTP ${descRes.status}`);
                 this.pendingLocations.delete(deviceLocation);
                 return;
             }
@@ -805,7 +813,7 @@ export class CastManager extends EventEmitter {
             const parsed = this.xmlParser.parse(descXml);
 
             if (!parsed?.root?.device) {
-                console.warn('Invalid device description XML');
+                LogService.warn('SSDP', 'Invalid device description XML: missing root device element');
                 this.pendingLocations.delete(deviceLocation);
                 return;
             }
@@ -836,10 +844,11 @@ export class CastManager extends EventEmitter {
             };
 
             this.devices.set(usn, device);
+            LogService.info('SSDP', `Device found: ${device.name} (${device.modelName || 'unknown model'}) at ${device.ip}`);
             this.emit('deviceAdded', device);
         } catch (err) {
             if (deviceLocation) this.pendingLocations.delete(deviceLocation);
-            console.warn('Error handling SSDP response:', (err as Error).message);
+            LogService.warn('SSDP', `Error processing device response: ${(err as Error).message}`);
         }
     }
 
@@ -889,7 +898,7 @@ export class CastManager extends EventEmitter {
                 }
             });
         } catch (err) {
-            console.warn('Error extracting services:', err);
+            LogService.warn('SSDP', `Error extracting device services: ${err}`);
         }
 
         return services;
@@ -912,7 +921,7 @@ export class CastManager extends EventEmitter {
             // Add more capability detection logic as needed
 
         } catch (err) {
-            console.warn('Error extracting capabilities:', err);
+            LogService.warn('SSDP', `Error extracting device capabilities: ${err}`);
         }
 
         return capabilities;
@@ -1060,7 +1069,7 @@ ${body}
             } catch (muteError) {
                 // GetMute failed completely, device doesn't support it
                 deviceSupportsMute = false;
-                console.warn('Device does not support GetMute, using volume-based mute detection');
+                LogService.info('Status', 'Device does not support GetMute, using volume-based detection');
             }
 
             // If device doesn't support native mute, use volume-based logic
@@ -1071,7 +1080,7 @@ ${body}
 
             return {position, duration, isPlaying, volume, muted};
         } catch (err) {
-            console.warn('Error getting DLNA status:', err);
+            LogService.warn('Status', `Failed to get DLNA playback status: ${err}`);
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
     }
@@ -1139,7 +1148,7 @@ ${body}
                 this.emit('progressChanged', status.position);
 
             } catch (err) {
-                console.warn('Polling error:', err);
+                LogService.warn('Polling', `Playback status polling error: ${err}`);
             }
             this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
         };
@@ -1337,7 +1346,7 @@ ${body}
 
             return undefined;
         } catch (err) {
-            console.warn('Error extracting device icon:', err);
+            LogService.warn('SSDP', `Error extracting device icon: ${err}`);
             return undefined;
         }
     }

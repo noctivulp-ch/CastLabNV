@@ -1,5 +1,5 @@
-import React, {useContext, useEffect, useState} from 'react';
-import {Linking, ScrollView, StyleSheet, TouchableOpacity, View} from 'react-native';
+import React, {useCallback, useContext, useEffect, useState} from 'react';
+import {Linking, ScrollView, Share, StyleSheet, TouchableOpacity, View} from 'react-native';
 import {Divider, IconButton, List, Text} from 'react-native-paper';
 import {ThemeContext} from '../contexts/theme-context';
 import {initTranslate} from '../localization/translate';
@@ -7,6 +7,7 @@ import {SvgXml} from 'react-native-svg';
 import {Asset} from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
 import app from '../../app.json';
+import {LogService} from '../services/LogService';
 
 const AboutScreen: React.FC = () => {
     const {theme} = useContext(ThemeContext);
@@ -42,6 +43,21 @@ const AboutScreen: React.FC = () => {
     const openURL = (url: string) => {
         Linking.openURL(url);
     };
+
+    /**
+     * Export application logs via the system share dialog
+     */
+    const handleExportLogs = useCallback(async () => {
+        const logContent = LogService.export();
+        try {
+            await Share.share({
+                message: logContent,
+                title: 'CastLab Logs',
+            });
+        } catch (error) {
+            console.error('Failed to share logs:', error);
+        }
+    }, []);
 
     return (
         <ScrollView style={[styles.container, {backgroundColor: theme.colors.background}]}>
@@ -79,6 +95,17 @@ const AboutScreen: React.FC = () => {
                 description="https://codeberg.org/tom79/CastLab/issues"
                 left={props => <List.Icon {...props} icon="bug"/>}
                 onPress={() => openURL('https://codeberg.org/tom79/CastLab/issues')}
+                titleStyle={styles.listTitle}
+            />
+
+            <Divider/>
+
+            {/* Export Logs Section */}
+            <List.Item
+                title={i18n.t('export_logs')}
+                description={i18n.t('export_logs_description')}
+                left={props => <List.Icon {...props} icon="file-document-outline"/>}
+                onPress={handleExportLogs}
                 titleStyle={styles.listTitle}
             />
 

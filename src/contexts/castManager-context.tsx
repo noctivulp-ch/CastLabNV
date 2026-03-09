@@ -4,6 +4,7 @@ import {Device} from "../DLNACast/types/Device";
 import {CastConfig} from "../DLNACast/config/CastConfig";
 import {useDispatch} from 'react-redux';
 import {clearCast, setCurrentAsset} from '../store/slice/castSlice';
+import {LogService} from '../services/LogService';
 
 const castManager = new CastManager();
 
@@ -343,7 +344,7 @@ export const useCastConnection = () => {
         try {
             await castManager.connect(device);
         } catch (error) {
-            console.error('Failed to connect to device:', error);
+            LogService.error('Connection', `Failed to connect to device: ${error}`);
         }
     };
 
@@ -351,7 +352,7 @@ export const useCastConnection = () => {
         try {
             await castManager.disconnect();
         } catch (error) {
-            console.error('Failed to disconnect from device:', error);
+            LogService.error('Connection', `Failed to disconnect: ${error}`);
         }
     };
 
@@ -370,7 +371,7 @@ export const useCastSearch = () => {
         try {
             await castManager.startSearch(duration);
         } catch (error) {
-            console.error('Failed to start device search:', error);
+            LogService.error('Search', `Failed to start device search: ${error}`);
         }
     };
 
@@ -378,7 +379,7 @@ export const useCastSearch = () => {
         try {
             await castManager.stopSearch();
         } catch (error) {
-            console.error('Failed to stop device search:', error);
+            LogService.error('Search', `Failed to stop device search: ${error}`);
         }
     };
 
@@ -397,7 +398,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.castMedia(mediaInfo);
         } catch (error) {
-            console.error('Failed to cast media:', error);
+            LogService.error('Cast', `Failed to cast media: ${error}`);
         }
     };
 
@@ -405,7 +406,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.play();
         } catch (error) {
-            console.error('Failed to play:', error);
+            LogService.error('Playback', `Failed to play: ${error}`);
         }
     };
 
@@ -413,7 +414,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.pause();
         } catch (error) {
-            console.error('Failed to pause:', error);
+            LogService.error('Playback', `Failed to pause: ${error}`);
         }
     };
 
@@ -421,7 +422,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.seek(position);
         } catch (error) {
-            console.error('Failed to seek:', error);
+            LogService.error('Playback', `Failed to seek: ${error}`);
         }
     };
 
@@ -429,7 +430,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.setVolume(volume);
         } catch (error) {
-            console.error('Failed to set volume:', error);
+            LogService.error('Playback', `Failed to set volume: ${error}`);
         }
     };
 
@@ -437,7 +438,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.mute(muted);
         } catch (error) {
-            console.error('Failed to mute/unmute:', error);
+            LogService.error('Playback', `Failed to toggle mute: ${error}`);
         }
     };
 
