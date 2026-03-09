@@ -16,6 +16,7 @@ interface CustomAppBarProps {
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
     onThemeCustomizerPressed?: () => void;
+    onOpenFilePressed?: () => void;
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
@@ -27,7 +28,8 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 onButtonCastPressed,
                                                                                 onPlaylistsPressed,
                                                                                 onVideoExtractorPressed,
-                                                                                onThemeCustomizerPressed
+                                                                                onThemeCustomizerPressed,
+                                                                                onOpenFilePressed
                                                                             }) => {
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
@@ -118,6 +120,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         }
     }
 
+    const openFile = () => {
+        setMenuVisible(false);
+        if (onOpenFilePressed) {
+            onOpenFilePressed();
+        }
+    }
+
     const openAbout = () => {
         setMenuVisible(false);
         navigation.navigate('About');
@@ -163,6 +172,10 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                    leadingIcon={"palette"}
                                    accessibilityLabel={i18n.t('customize_theme')}/>
                     )}
+
+                    {/* Open file picker */}
+                    <Menu.Item onPress={openFile} title={i18n.t('open_file')} leadingIcon={"file-document-outline"}
+                               accessibilityLabel={i18n.t('open_file')}/>
 
                     {/* Only show playlists menu item if not in playlists-related screens */}
                     {!hidePlaylistsMenuItem && (
