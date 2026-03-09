@@ -16,6 +16,9 @@ export class CastUtils {
             'webm': 'video/webm',
             '3gp': 'video/3gpp',
             'm4v': 'video/mp4',
+            // Streaming formats
+            'm3u8': 'application/vnd.apple.mpegurl',
+            'm3u': 'audio/mpegurl',
             // Audio formats
             'mp3': 'audio/mpeg',
             'aac': 'audio/aac',
