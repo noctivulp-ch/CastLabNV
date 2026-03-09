@@ -31,13 +31,15 @@ import * as FileSystem from 'expo-file-system';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
-import castReducer, {setCurrentAsset} from "../store/slice/castSlice";
+import * as DocumentPicker from 'expo-document-picker';
+import castReducer, {addToAssets, setCurrentAsset} from "../store/slice/castSlice";
 import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
 import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
 import VideoExtractorScreen from "./VideoExtractorScreen";
 import AboutScreen from "./AboutScreen";
 import ThemeCustomizerScreen from "./ThemeCustomizerScreen";
+import {CastUtils} from "../DLNACast/utils/CastUtils";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -60,7 +62,7 @@ export type IRootState = ReturnType<typeof rootReducer>;
 // Navigation parameter types
 export type RootStackParamList = {
     Albums: { playerHeight?: number };
-    Album: { album: Album, videoOnly: boolean, playerHeight?: number };
+    Album: { album: Album, videoOnly: boolean, playerHeight?: number, initialMediaType?: string };
     Playlists: { playerHeight?: number };
     PlaylistEdit: {
         playlistId: number;
@@ -75,8 +77,6 @@ export type RootStackParamList = {
     };
     VideoExtractor: { playerHeight?: number };
     ThemeCustomizer: {};
-    PictureAlbums: any;
-    VideoAlbums: any;
     About: undefined;
 }
 
@@ -202,6 +202,7 @@ const MainContent: React.FC = () => {
                         // Start casting the new media
                         await castManager.castMedia({
                             contentUrl: uri,
+                            contentType: CastUtils.getMimeTypeFromUrl(asset.filename),
                             metadata,
                             streamDuration: asset.duration || (isImage ? 0 : undefined),
                         });
@@ -336,6 +337,13 @@ const MainContent: React.FC = () => {
     };
 
     /**
+     * Handle adding a manual FCast device
+     */
+    const handleAddFCastDevice = useCallback((ip: string, port: number, name?: string) => {
+        castManager.addFCastDevice(ip, port, name);
+    }, [castManager]);
+
+    /**
      * Handle playlists button press - navigate to playlists screen
      */
     const handlePlaylistsPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
@@ -358,6 +366,53 @@ const MainContent: React.FC = () => {
     const handleVideoExtractorPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
         navigation.navigate('VideoExtractor', {});
     }, []);
+
+    /**
+     * Handle open file button press - pick files via native file picker and cast them
+     */
+    const handleOpenFile = useCallback(async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['video/*', 'audio/*', 'image/*'],
+                multiple: true,
+                copyToCacheDirectory: true,
+            });
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            const pickedAssets: Asset[] = result.assets.map((file) => {
+                let mediaType: 'photo' | 'video' | 'audio' = 'video';
+                if (file.mimeType?.startsWith('image/')) {
+                    mediaType = 'photo';
+                } else if (file.mimeType?.startsWith('audio/')) {
+                    mediaType = 'audio';
+                }
+
+                return {
+                    id: `file-${Date.now()}-${file.name}`,
+                    filename: file.name,
+                    uri: file.uri,
+                    mediaType,
+                    width: 0,
+                    height: 0,
+                    duration: 0,
+                    creationTime: Date.now(),
+                    modificationTime: Date.now(),
+                    albumId: '',
+                } as Asset;
+            });
+
+            if (pickedAssets.length > 0) {
+                dispatch(addToAssets(pickedAssets));
+                dispatch(setCurrentAsset(pickedAssets[0]));
+            }
+        } catch (error) {
+            console.error('Main: File picker error:', error);
+            showErrorToast(i18n.t('no_files_selected'));
+        }
+    }, [dispatch, i18n, showErrorToast]);
 
 
     /**
@@ -531,6 +586,7 @@ const MainContent: React.FC = () => {
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}
+                            onOpenFilePressed={handleOpenFile}
                             castManager={castManager}
                             themePressed={displayThemePicker}
                         />,
@@ -731,6 +787,7 @@ const MainContent: React.FC = () => {
                 devicePressed={devicePressedHandler}
                 visible={castDialogVisible}
                 hide={() => setCastDialogVisible(false)}
+                onAddFCastDevice={handleAddFCastDevice}
             />
 
             {/* Toast notifications with enhanced messages */}
