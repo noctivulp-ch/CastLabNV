@@ -5,7 +5,7 @@ import {ThemeContext} from '../contexts/theme-context';
 import {initTranslate} from '../localization/translate';
 import {SvgXml} from 'react-native-svg';
 import {Asset} from 'expo-asset';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import app from '../../app.json';
 import {LogService} from '../services/LogService';
 

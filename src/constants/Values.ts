@@ -1,4 +1,4 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 export const SERVER_PORT = 9125;
 export const UPNP_PORT = 9127;

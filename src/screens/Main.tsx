@@ -27,7 +27,7 @@ import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
 import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
@@ -67,6 +67,7 @@ export type RootStackParamList = {
     PlaylistEdit: {
         playlistId: number;
         isNew?: boolean;
+        playlistName?: string;
     };
     MediaSelector: {
         onSelectAssets: (assets: Asset[]) => void;
@@ -696,7 +697,7 @@ const MainContent: React.FC = () => {
                         name="PlaylistEdit"
                         options={({route}) => ({
                             headerShown: true,
-                            title: route.params?.playlist?.name || i18n.t('edit_playlist'),
+                            title: route.params?.playlistName || i18n.t('edit_playlist'),
                             headerStyle: {
                                 backgroundColor: theme.colors.surface,
                             },

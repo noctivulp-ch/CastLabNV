@@ -40,13 +40,14 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     let title = getHeaderTitle(options, route.name);
 
     // Custom title logic for specific routes
-    if (route.name === "Album" && route?.params?.album) {
-        title = route.params.album.title;
-    } else if (route.name === "PlaylistEdit" && route?.params?.playlist?.name) {
-        title = `${i18n.t('edit')} "${route.params.playlist.name}"`;
+    const params = route.params as Record<string, any> | undefined;
+    if (route.name === "Album" && params?.album) {
+        title = params.album.title;
+    } else if (route.name === "PlaylistEdit" && params?.playlistName) {
+        title = `${i18n.t('edit')} "${params.playlistName}"`;
     } else if (route.name === "MediaSelector") {
-        if (route?.params?.playlistName) {
-            title = i18n.t('add_media_to_named_playlist', {playlistName: route.params.playlistName});
+        if (params?.playlistName) {
+            title = i18n.t('add_media_to_named_playlist', {playlistName: params.playlistName});
         } else {
             title = i18n.t('select_media_title');
         }
