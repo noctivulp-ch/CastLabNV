@@ -27,6 +27,7 @@
   "reset": "Reset",
   "width": "Width",
   "height": "Height",
+  "filename": "Filename",
   "contextual_menu": "Contextual menu",
   "change_theme": "Change theme",
   "theme_customizer": "Theme Customizer",
