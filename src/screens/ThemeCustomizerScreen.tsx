@@ -129,14 +129,7 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
     const loadBaseTheme = (base: 'light' | 'dark') => {
         setBaseTheme(base);
         const sourceColors = base === 'dark' ? darkColors.colors : lightColors.colors;
-        const baseColors: any = {};
-        Object.keys(sourceColors).forEach(key => {
-            const value = sourceColors[key as keyof typeof sourceColors];
-            if (typeof value === 'string') {
-                baseColors[key] = value;
-            }
-        });
-        setColors(baseColors);
+        setColors({...sourceColors} as any);
         setSelectedPreset(null);
     };
 
@@ -224,7 +217,10 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
                         showsHorizontalScrollIndicator={false}
                         style={styles.presetsScroll}
                     >
-                        {THEME_PRESETS.map(preset => (
+                        {THEME_PRESETS.filter(preset => {
+                            const isDark = isColorDark(preset.colors.background);
+                            return baseTheme === 'dark' ? isDark : !isDark;
+                        }).map(preset => (
                             <Surface
                                 key={preset.id}
                                 style={[
