@@ -1,3 +1,5 @@
+export type DeviceProtocol = 'dlna' | 'fcast';
+
 export interface Device {
     id: string;
     name: string;
@@ -9,6 +11,7 @@ export interface Device {
     modelName?: string;
     capabilities?: string[];
     iconUrl?: string; // Single icon URL for display
+    protocol: DeviceProtocol; // Protocol used by this device
 }
 
 export interface DeviceCapabilities {

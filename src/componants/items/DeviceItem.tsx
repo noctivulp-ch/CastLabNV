@@ -20,7 +20,7 @@ const DeviceItem: React.FC<AssetItemProps> = ({device, onPressed}) => {
             }
             {!device.iconUrl &&
                 <Icon size={24}
-                      source={"television"}/>
+                      source={device.protocol === 'fcast' ? 'cast-variant' : 'television'}/>
             }
             <Text style={styles.text}>{device.name}</Text>
         </Pressable>

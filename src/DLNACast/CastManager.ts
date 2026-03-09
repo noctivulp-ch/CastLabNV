@@ -9,6 +9,8 @@ import {initTranslate} from "../localization/translate";
 import {CastUtils} from './utils/CastUtils';
 import {CastConfig} from './config/CastConfig';
 import {LogService} from '../services/LogService';
+import {FCastClient, FCAST_PORT} from './FCastClient';
+import Zeroconf from 'react-native-zeroconf';
 
 // Constants for SSDP discovery (from config)
 const MULTICAST_ADDRESS = CastConfig.MULTICAST_ADDRESS;
@@ -51,6 +53,13 @@ export class CastManager extends EventEmitter {
     private heartbeatInterval: NodeJS.Timeout | null = null; // Heartbeat to maintain the connection
     private searchRetryTimers: NodeJS.Timeout[] = []; // Timers for M-SEARCH retries
     private pendingLocations: Set<string> = new Set(); // Track locations being processed to avoid duplicates
+    private fcastClient: FCastClient | null = null; // FCast protocol client
+    private zeroconf: Zeroconf | null = null;
+    private fcastReconnectAttempts = 0;
+    private fcastReconnectTimer: NodeJS.Timeout | null = null;
+    private intentionalDisconnect = false;
+    private static readonly FCAST_MAX_RECONNECT = 3;
+    private static readonly FCAST_RECONNECT_DELAY = 3000;
 
     constructor() {
         super();
@@ -91,6 +100,143 @@ export class CastManager extends EventEmitter {
      */
     getCurrentMediaTitle(): string | null {
         return this.currentMediaInfo?.metadata?.title || null;
+    }
+
+    /**
+     * Checks if the current device uses the FCast protocol.
+     */
+    private isFCastDevice(): boolean {
+        return this.currentDevice?.protocol === 'fcast';
+    }
+
+    /**
+     * Adds a manually configured FCast device.
+     * @param ip - The IP address of the FCast receiver.
+     * @param port - The port (default 46899).
+     * @param name - An optional name for the device.
+     */
+    addFCastDevice(ip: string, port: number = 46899, name?: string): void {
+        const device: Device = {
+            id: `fcast-${ip}:${port}`,
+            name: name || `FCast (${ip})`,
+            location: `tcp://${ip}:${port}`,
+            ip,
+            port,
+            services: {},
+            protocol: 'fcast',
+        };
+        this.devices.set(device.id, device);
+        LogService.info('FCast', `Manual device added: ${device.name} at ${ip}:${port}`);
+        this.emit('deviceAdded', device);
+    }
+
+    /**
+     * Starts mDNS discovery for FCast receivers (_fcast._tcp).
+     */
+    private startFCastDiscovery(): void {
+        try {
+            this.zeroconf = new Zeroconf();
+
+            this.zeroconf.on('resolved', (service: any) => {
+                const ip = service.addresses?.find((addr: string) => addr.includes('.'));
+                if (!ip) return;
+
+                const port = service.port || FCAST_PORT;
+                const name = service.name || `FCast (${ip})`;
+                const deviceId = `fcast-${ip}:${port}`;
+
+                if (!this.devices.has(deviceId)) {
+                    const device: Device = {
+                        id: deviceId,
+                        name,
+                        location: `tcp://${ip}:${port}`,
+                        ip,
+                        port,
+                        services: {},
+                        protocol: 'fcast',
+                    };
+                    this.devices.set(deviceId, device);
+                    LogService.info('FCast', `Discovered via mDNS: ${name} at ${ip}:${port}`);
+                    this.emit('deviceAdded', device);
+                }
+            });
+
+            this.zeroconf.on('error', (err: any) => {
+                LogService.warn('FCast', `mDNS discovery error: ${err}`);
+            });
+
+            this.zeroconf.scan('fcast', 'tcp');
+            LogService.info('FCast', 'mDNS discovery started (_fcast._tcp)');
+        } catch (err) {
+            LogService.warn('FCast', `Failed to start mDNS discovery: ${err}`);
+        }
+    }
+
+    private stopFCastDiscovery(): void {
+        if (this.zeroconf) {
+            try {
+                this.zeroconf.stop();
+                this.zeroconf.removeAllListeners();
+            } catch (err) {
+                LogService.warn('FCast', `Error stopping mDNS discovery: ${err}`);
+            }
+            this.zeroconf = null;
+        }
+    }
+
+    private attemptFCastReconnect(device: Device): void {
+        this.fcastReconnectAttempts++;
+
+        if (this.fcastReconnectAttempts > CastManager.FCAST_MAX_RECONNECT) {
+            LogService.warn('FCast', `Reconnect failed after ${CastManager.FCAST_MAX_RECONNECT} attempts, giving up`);
+            this.currentDevice = null;
+            this.fcastReconnectAttempts = 0;
+            this.cancelFCastReconnect();
+            this.emit('disconnected');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        LogService.info('FCast', `Reconnect attempt ${this.fcastReconnectAttempts}/${CastManager.FCAST_MAX_RECONNECT} in ${CastManager.FCAST_RECONNECT_DELAY / 1000}s...`);
+
+        this.fcastReconnectTimer = setTimeout(async () => {
+            try {
+                this.fcastClient = new FCastClient(device.ip, device.port);
+
+                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
+                    this.emit('stateChanged', state);
+                    this.emit('progressChanged', state.position);
+                });
+
+                this.fcastClient.on('volumeUpdate', (_volume: number) => {});
+
+                this.fcastClient.on('error', (message: string) => {
+                    this.emit('error', message);
+                });
+
+                this.fcastClient.on('disconnected', () => {
+                    this.fcastClient = null;
+                    if (this.intentionalDisconnect) return;
+                    this.attemptFCastReconnect(device);
+                });
+
+                await this.fcastClient.connect();
+                this.fcastReconnectAttempts = 0;
+                LogService.info('FCast', 'Reconnected successfully');
+            } catch (err) {
+                LogService.warn('FCast', `Reconnect attempt ${this.fcastReconnectAttempts} failed: ${err}`);
+                this.fcastClient = null;
+                this.attemptFCastReconnect(device);
+            }
+        }, CastManager.FCAST_RECONNECT_DELAY);
+    }
+
+    private cancelFCastReconnect(): void {
+        if (this.fcastReconnectTimer) {
+            clearTimeout(this.fcastReconnectTimer);
+            this.fcastReconnectTimer = null;
+        }
+        this.fcastReconnectAttempts = 0;
     }
 
     /**
@@ -166,6 +312,9 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.socket', {message: err.message}));
         });
 
+        // Start FCast mDNS discovery
+        this.startFCastDiscovery();
+
         // Stop after duration
         this.timeout = setTimeout(() => this.stopSearch(), duration);
     }
@@ -203,6 +352,9 @@ export class CastManager extends EventEmitter {
             });
         }
 
+        // Stop FCast mDNS discovery
+        this.stopFCastDiscovery();
+
         // Clean up listeners
         this.cleanupListeners();
         LogService.info('SSDP', `Search stopped, ${this.devices.size} device(s) found`);
@@ -215,15 +367,47 @@ export class CastManager extends EventEmitter {
      */
     async connect(device: Device): Promise<void> {
         try {
-            // Verify device is still reachable
-            const isReachable = await this.checkDeviceReachability(device);
-            if (!isReachable) {
-                this.emit('error', this.i18n.t('error.deviceUnreachable'));
-                return;
+            if (device.protocol === 'fcast') {
+                // FCast connection via TCP
+                this.fcastClient = new FCastClient(device.ip, device.port);
+
+                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
+                    this.emit('stateChanged', state);
+                    this.emit('progressChanged', state.position);
+                });
+
+                this.fcastClient.on('volumeUpdate', (volume: number) => {
+                    // Volume update handled via playbackUpdate
+                });
+
+                this.fcastClient.on('error', (message: string) => {
+                    this.emit('error', message);
+                });
+
+                this.fcastClient.on('disconnected', () => {
+                    this.fcastClient = null;
+                    if (this.intentionalDisconnect) {
+                        return; // Manual disconnect — don't reconnect
+                    }
+                    this.attemptFCastReconnect(device);
+                });
+
+                await this.fcastClient.connect();
+                this.currentDevice = device;
+                this.fcastReconnectAttempts = 0;
+                this.intentionalDisconnect = false;
+                this.emit('connected', device);
+            } else {
+                // DLNA connection
+                const isReachable = await this.checkDeviceReachability(device);
+                if (!isReachable) {
+                    this.emit('error', this.i18n.t('error.deviceUnreachable'));
+                    return;
+                }
+                this.currentDevice = device;
+                this.startPolling();
+                this.emit('connected', device);
             }
-            this.currentDevice = device;
-            this.startPolling();
-            this.emit('connected', device);
         } catch (err) {
             this.emit('error', this.i18n.t('error.connect', {message: (err as Error).message}));
         }
@@ -237,25 +421,33 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
-        // Stop heartbeat when stopping playback
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            try {
+                await this.fcastClient.stop();
+            } catch (err) {
+                this.emit('error', this.i18n.t('error.stop', {message: (err as Error).message}));
+            }
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        // DLNA stop
         this.stopHeartbeat();
-        // Execute stop command in background with proper error handling
         this.dlnaStop().then(() => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
-
-            // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
-            // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.stop', {message: err.message}));
         });
     }
@@ -270,19 +462,27 @@ export class CastManager extends EventEmitter {
         }
 
         try {
-            // Stop heartbeat and polling immediately
-            this.stopHeartbeat();
-            // Stop polling immediately
-            this.stopPolling();
-            // First stop any current playback
-            await this.stop();
-            // Clear state immediately
-            this.currentDevice = null;
-            this.currentMediaUri = null;
-            this.currentMediaInfo = null;
-            // Emit disconnected event
-            this.emit('disconnected');
-            this.emit('mediaCleared');
+            if (this.isFCastDevice() && this.fcastClient) {
+                this.intentionalDisconnect = true;
+                this.cancelFCastReconnect();
+                await this.fcastClient.stop();
+                this.fcastClient.disconnect();
+                this.fcastClient = null;
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            } else {
+                this.stopHeartbeat();
+                this.stopPolling();
+                await this.stop();
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            }
         } catch (err) {
             this.emit('error', this.i18n.t('error.disconnect', {message: (err as Error).message}));
         }
@@ -317,22 +517,22 @@ export class CastManager extends EventEmitter {
         this.currentMediaUri = mediaInfo.contentUrl;
 
         try {
-            // Clear cache before starting new media
-            this.soapCache.clear();
-
-            // Build basic DIDL metadata for images/videos
-            const didlMetadata = this.buildDIDLMetadata(mediaInfo);
-            await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
-            await this.dlnaPlay();
-            // Start heartbeat to maintain connection
-            this.startHeartbeat();
-            // Reset progress to 0 when starting new media
-            this.emit('progressChanged', 0);
-
-            // Then get actual status after a brief delay
-            this.forceStatusUpdate();
-
-            this.emit('castingStarted');
+            if (this.isFCastDevice() && this.fcastClient) {
+                // FCast protocol
+                await this.fcastClient.play(mediaInfo);
+                this.emit('progressChanged', 0);
+                this.emit('castingStarted');
+            } else {
+                // DLNA protocol
+                this.soapCache.clear();
+                const didlMetadata = this.buildDIDLMetadata(mediaInfo);
+                await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
+                await this.dlnaPlay();
+                this.startHeartbeat();
+                this.emit('progressChanged', 0);
+                this.forceStatusUpdate();
+                this.emit('castingStarted');
+            }
         } catch (err) {
             this.emit('error', this.i18n.t('error.cast', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
@@ -365,6 +565,12 @@ export class CastManager extends EventEmitter {
     async seek(position: number): Promise<void> {
         if (!this.currentDevice) {
             this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            await this.fcastClient.seek(position);
+            this.emit('progressChanged', position);
             return;
         }
 
@@ -457,11 +663,14 @@ export class CastManager extends EventEmitter {
      */
     async getStatus(): Promise<PlaybackState> {
         if (!this.currentDevice) {
-            // Stop background tasks silently
             this.stopHeartbeat();
             this.stopPolling();
-            // Return default state without emitting error (polling will handle it)
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            // FCast pushes updates via events; return last known state
+            return this.fcastClient.getPlaybackState();
         }
 
         try {
@@ -495,8 +704,15 @@ export class CastManager extends EventEmitter {
      * Cleanup method to be called when the instance is no longer needed.
      */
     public cleanup(): void {
+        this.intentionalDisconnect = true;
+        this.cancelFCastReconnect();
         this.stopSearch();
         this.stopHeartbeat();
+        this.stopFCastDiscovery();
+        if (this.fcastClient) {
+            this.fcastClient.disconnect();
+            this.fcastClient = null;
+        }
         this.disconnect();
         this.soapCache.clear();
         this.devices.clear();
@@ -512,11 +728,16 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            // FCast doesn't have a dedicated mute opcode; set volume to 0 or restore
+            await this.fcastClient.setVolume(muted ? 0 : 0.5);
+            return;
+        }
+
         this.dlnaSetMute(muted).then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.mute', {message: err.message}));
         });
     }
@@ -530,14 +751,17 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            await this.fcastClient.setVolume(volume);
+            return;
+        }
+
         await this.dlnaSetVolume(Math.round(volume * 100)).then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.mute', {message: err.message}));
         });
-
     }
 
     /**
@@ -549,12 +773,16 @@ export class CastManager extends EventEmitter {
             return;
         }
 
-        // Execute pause command in background with proper error handling
+        if (this.isFCastDevice() && this.fcastClient) {
+            this.fcastClient.pause().catch((err) => {
+                this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
+            });
+            return;
+        }
+
         this.dlnaPause().then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.pause', {message: err.message}));
         });
     }
@@ -567,12 +795,17 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
-        // Execute play command in background with proper error handling
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            this.fcastClient.resume().catch((err) => {
+                this.emit('error', this.i18n.t('error.play', {message: (err as Error).message}));
+            });
+            return;
+        }
+
         this.dlnaPlay().then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.pause', {message: err.message}));
         });
     }
@@ -841,6 +1074,7 @@ export class CastManager extends EventEmitter {
                 modelName: deviceInfo.modelName,
                 capabilities: this.extractCapabilities(deviceInfo),
                 iconUrl: await this.extractDeviceIcon(parsed, deviceLocation),
+                protocol: 'dlna',
             };
 
             this.devices.set(usn, device);
