@@ -96,6 +96,7 @@ const MainContent: React.FC = () => {
     const [alertMessage, setAlertMessage] = useState<string>("");
     const [toastText1, setToastText1] = useState<string>("");
     const [toastText2, setToastText2] = useState<string>("");
+    const [toastType, setToastType] = useState<"info" | "error">("info");
     const [castDialogVisible, setCastDialogVisible] = useState(false);
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
@@ -121,6 +122,21 @@ const MainContent: React.FC = () => {
     // Server management
     const serverRef = useRef<StaticServer | null>(null);
 
+    // Toast helpers
+    const showInfoToast = useCallback((text1: string, text2 = "") => {
+        setToastType("info");
+        setToastText1(text1);
+        setToastText2(text2);
+        setToastVisible(true);
+    }, []);
+
+    const showErrorToast = useCallback((text1: string, text2 = "") => {
+        setToastType("error");
+        setToastText1(text1);
+        setToastText2(text2);
+        setToastVisible(true);
+    }, []);
+
     // Initialize background notifications
     useBackgroundNotification();
 
@@ -134,12 +150,10 @@ const MainContent: React.FC = () => {
     // Handle cast manager errors with toast notifications
     useEffect(() => {
         if (error) {
-            setToastText1(error);
             console.error(error);
-            setToastText2("");
-            setToastVisible(true);
+            showErrorToast(error);
         }
-    }, [error]);
+    }, [error, showErrorToast]);
 
     // Update player visibility based on connected device
     useEffect(() => {
@@ -164,9 +178,7 @@ const MainContent: React.FC = () => {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
                         // Show error toast for file copy failures
-                        setToastText1(i18n.t('failed_to_prepare_media_file'));
-                        setToastText2(i18n.t('check_storage_permissions_and_try_again'));
-                        setToastVisible(true);
+                        showErrorToast(i18n.t('failed_to_prepare_media_file'), i18n.t('check_storage_permissions_and_try_again'));
                         return;
                     }
                 }
@@ -196,9 +208,7 @@ const MainContent: React.FC = () => {
 
                         // Show success toast for first media or when manually selecting
                         if (cast.assets.length === 1 || cast.currentIndex === 0) {
-                            setToastText1(i18n.t('now_casting', {filename: asset.filename}));
-                            setToastText2(connectedDevice?.name || "");
-                            setToastVisible(true);
+                            showInfoToast(i18n.t('now_casting', {filename: asset.filename}), connectedDevice?.name || "");
                         }
 
                     } catch (castError) {
@@ -208,9 +218,7 @@ const MainContent: React.FC = () => {
                         // Show error toast for casting failures
                         const errorMessage = (castError as Error).message;
                         if (!errorMessage.includes('No device connected')) {
-                            setToastText1(i18n.t('failed_to_cast_media'));
-                            setToastText2(errorMessage || i18n.t('unknown_error'));
-                            setToastVisible(true);
+                            showErrorToast(i18n.t('failed_to_cast_media'), errorMessage || i18n.t('unknown_error'));
                         }
                     }
                 }
@@ -293,17 +301,13 @@ const MainContent: React.FC = () => {
             setCastDialogVisible(false);
 
             // Show connection success toast
-            setToastText1(i18n.t('connected_to_device', {deviceName: device.name}));
-            setToastText2(i18n.t('ready_to_cast_media'));
-            setToastVisible(true);
+            showInfoToast(i18n.t('connected_to_device', {deviceName: device.name}), i18n.t('ready_to_cast_media'));
 
         } catch (connectError) {
             console.error('Main: Failed to connect to device:', connectError);
 
             // Show connection error toast
-            setToastText1(i18n.t('failed_to_connect_to_device', {deviceName: device.name}));
-            setToastText2((connectError as Error).message || i18n.t('connection_failed'));
-            setToastVisible(true);
+            showErrorToast(i18n.t('failed_to_connect_to_device', {deviceName: device.name}), (connectError as Error).message || i18n.t('connection_failed'));
         }
     }, [castManager, i18n]);
 
@@ -316,15 +320,11 @@ const MainContent: React.FC = () => {
                 await castManager.disconnect();
 
                 // Show disconnection toast
-                setToastText1(i18n.t('disconnected_from_cast_device'));
-                setToastText2("");
-                setToastVisible(true);
+                showInfoToast(i18n.t('disconnected_from_cast_device'));
 
             } catch (disconnectError) {
                 console.error('Main: Failed to disconnect:', disconnectError);
-                setToastText1(i18n.t('failed_to_disconnect'));
-                setToastText2((disconnectError as Error).message || i18n.t('disconnect_failed'));
-                setToastVisible(true);
+                showErrorToast(i18n.t('failed_to_disconnect'), (disconnectError as Error).message || i18n.t('disconnect_failed'));
             }
         } else {
             if (castManager.isSearching()) {
@@ -474,9 +474,7 @@ const MainContent: React.FC = () => {
                 console.error('Main: Error starting servers:', (err as Error).message);
 
                 // Show server start error toast
-                setToastText1(i18n.t('failed_to_start_media_server'));
-                setToastText2(i18n.t('media_casting_may_not_work_properly'));
-                setToastVisible(true);
+                showErrorToast(i18n.t('failed_to_start_media_server'), i18n.t('media_casting_may_not_work_properly'));
             }
         };
 
@@ -737,10 +735,12 @@ const MainContent: React.FC = () => {
 
             {/* Toast notifications with enhanced messages */}
             <Toast
-                type={"info"}
+                type={toastType}
                 text1={toastText1}
                 text2={toastText2}
                 visible={toastVisible}
+                time={toastType === "error" ? 5000 : 2000}
+                bottomOffset={playerVisible ? playerHeight + 20 : 40}
                 onToastHide={() => setToastVisible(false)}
             />
 
