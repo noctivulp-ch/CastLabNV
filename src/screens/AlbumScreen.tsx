@@ -13,6 +13,15 @@ import {addToAssets, setAssets, setCurrentAsset} from "../store/slice/castSlice"
 import {DatePickerModal} from 'react-native-paper-dates';
 import {useScrollDirection} from "../hooks/useScrollDirection";
 
+import {CastUtils} from "../DLNACast/utils/CastUtils";
+
+/**
+ * Filters out non-castable media (files indexed by Android but not supported for DLNA/FCast casting)
+ */
+const filterFakeMedia = (assets: Asset[]): Asset[] => {
+    return assets.filter((asset) => CastUtils.isSupportedExtension(asset.filename));
+};
+
 export type AlbumProps = NativeStackScreenProps<RootStackParamList, "Album"> & {
     playerHeight: number;
     onScrollDirectionChange?: (isScrollingDown: boolean) => void;
@@ -39,6 +48,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
     // Extract navigation parameters
     const album = route.params?.album;
     const videoOnly = route.params?.videoOnly;
+    const initialMediaType = route.params?.initialMediaType;
 
     // Component state management
     const [albumReady, setAlbumReady] = useState(false);
@@ -54,7 +64,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
         MediaLibrary.MediaType.audio
     ];
     const [type, setType] = useState<MediaLibrary.MediaTypeValue | MediaLibrary.MediaTypeValue[] | undefined>(
-        videoOnly ? "video" : allMediaTypes
+        initialMediaType ? initialMediaType as MediaLibrary.MediaTypeValue : (videoOnly ? "video" : allMediaTypes)
     );
     const [sortModificationTimeAsc, setSortModificationTimeAsc] = useState<SortByValue>([SortBy.modificationTime, false]);
     const [sortCreationTimeAsc, setSortCreationTimeAsc] = useState<SortByValue | undefined>(undefined);
@@ -111,8 +121,9 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
             const assetsPhotoOptions = buildAssetsOptions(endCursor);
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
 
-            if (assetsPhoto.assets.length > 0) {
-                const newAssets = [...asset, ...assetsPhoto.assets];
+            const filteredNew = filterFakeMedia(assetsPhoto.assets);
+            if (filteredNew.length > 0) {
+                const newAssets = [...asset, ...filteredNew];
                 setAsset(newAssets);
 
                 // Update the Redux store with the complete asset list for autoplay
@@ -198,14 +209,15 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
 
             const assetsPhotoOptions = buildAssetsOptions();
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
+            const filtered = filterFakeMedia(assetsPhoto.assets);
 
-            setAsset(assetsPhoto.assets);
+            setAsset(filtered);
             setEndCursor(assetsPhoto.endCursor);
             setHasMore(assetsPhoto.hasNextPage);
             setAlbumReady(true);
 
             // Update Redux store with initial assets for autoplay
-            dispatch(setAssets(assetsPhoto.assets));
+            dispatch(setAssets(filtered));
 
             resetScroll();
         })();
