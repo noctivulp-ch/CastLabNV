@@ -18,6 +18,7 @@ import * as MediaLibrary from 'expo-media-library';
 import {Album, Asset, SortBy, SortByValue} from 'expo-media-library';
 import {initTranslate} from '../localization/translate';
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
+import {EventBus} from '../services/EventBus';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {DatePickerModal} from 'react-native-paper-dates';
 import PlayList from "../entities/PlayList";
@@ -25,7 +26,6 @@ import {getPlayList} from "../../db/playlistDB";
 
 type RootStackParamList = {
     MediaSelector: {
-        onSelectAssets: (assets: Asset[]) => void;
         allowMultiple?: boolean;
         playlistId: number;
     };
@@ -58,7 +58,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     const route = useRoute<MediaSelectorRouteProp>();
     const insets = useSafeAreaInsets();
     const [excludeAssets, setExcludeAssets] = useState<Asset[]>([]);
-    const {allowMultiple = true, onSelectAssets, playlistId} = route.params;
+    const {allowMultiple = true, playlistId} = route.params;
     const [playlist, setPlaylist] = useState<PlayList>(new PlayList());
     // Media library permissions
     const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
@@ -289,8 +289,6 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
      */
     useEffect(() => {
         const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-            // Allow navigation if confirming selection
-            console.log('beforeRemove', isConfirmingRef.current);
             if (isConfirmingRef.current) {
                 return;
             }
@@ -381,24 +379,13 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
     }, [dateRange, i18n]);
 
     /**
-     * Confirm selection and navigate back
+     * Confirm selection and navigate back to PlaylistEdit
      */
     const handleConfirmSelection = useCallback(() => {
-        // Set ref immediately (synchronous)
         isConfirmingRef.current = true;
-        if (onSelectAssets && typeof onSelectAssets === 'function') {
-            try {
-                onSelectAssets(selectedAssets);
-                navigation.goBack();
-            } catch (error) {
-                console.error('MediaSelector: Error executing callback:', error);
-                navigation.goBack();
-            }
-        } else {
-            console.error('MediaSelector: No valid callback found in route params');
-            navigation.goBack();
-        }
-    }, [selectedAssets, navigation, onSelectAssets]);
+        EventBus.emitAssetsSelected(selectedAssets);
+        navigation.goBack();
+    }, [selectedAssets, navigation]);
 
     /**
      * Load more assets when reaching end of list

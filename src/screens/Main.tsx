@@ -72,11 +72,8 @@ export type RootStackParamList = {
         playlistName?: string;
     };
     MediaSelector: {
-        onSelectAssets: (assets: Asset[]) => void;
-        excludeAssets?: Asset[];
         allowMultiple?: boolean;
-        playlistName?: string;
-        playlistId?: number;
+        playlistId: number;
     };
     VideoExtractor: { playerHeight?: number };
     ThemeCustomizer: {};
