@@ -40,6 +40,8 @@ import VideoExtractorScreen from "./VideoExtractorScreen";
 import AboutScreen from "./AboutScreen";
 import ThemeCustomizerScreen from "./ThemeCustomizerScreen";
 import {CastUtils} from "../DLNACast/utils/CastUtils";
+import * as ScreenShare from '../../modules/expo-screen-share/src';
+import {SCREEN_SHARE_PORT} from "../constants/Values";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -99,6 +101,7 @@ const MainContent: React.FC = () => {
     const [toastText2, setToastText2] = useState<string>("");
     const [toastType, setToastType] = useState<"info" | "error">("info");
     const [castDialogVisible, setCastDialogVisible] = useState(false);
+    const [screenSharing, setScreenSharing] = useState(false);
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
@@ -336,6 +339,56 @@ const MainContent: React.FC = () => {
             setCastDialogVisible(true);
         }
     };
+
+    /**
+     * Handle screen share button press
+     */
+    const handleScreenSharePressed = useCallback(async () => {
+        if (Platform.OS !== 'android') return;
+
+        if (screenSharing) {
+            await ScreenShare.stopScreenShare();
+            setScreenSharing(false);
+            try {
+                await castManager.stop();
+            } catch (_) {}
+            showInfoToast(i18n.t('screen_share_stopped'));
+            return;
+        }
+
+        const startSub = ScreenShare.addScreenShareListener('onScreenShareStarted', async (payload) => {
+            setScreenSharing(true);
+            startSub.remove();
+            try {
+                const ip = await Network.getIpAddressAsync();
+                const streamUrl = `http://${ip}:${SCREEN_SHARE_PORT}/stream`;
+                await castManager.castMedia({
+                    contentUrl: streamUrl,
+                    contentType: 'video/mp2t',
+                    metadata: {title: 'Screen Share', type: 'movie', images: []},
+                });
+                showInfoToast(i18n.t('screen_share_started'));
+            } catch (e) {
+                showErrorToast(i18n.t('screen_share_failed'), (e as Error).message);
+                await ScreenShare.stopScreenShare();
+                setScreenSharing(false);
+            }
+        });
+
+        const errorSub = ScreenShare.addScreenShareListener('onScreenShareError', (payload) => {
+            errorSub.remove();
+            startSub.remove();
+            showErrorToast(i18n.t('screen_share_failed'), payload.error);
+        });
+
+        try {
+            await ScreenShare.requestScreenShare(SCREEN_SHARE_PORT);
+        } catch (e) {
+            startSub.remove();
+            errorSub.remove();
+            showErrorToast(i18n.t('screen_share_failed'), (e as Error).message);
+        }
+    }, [screenSharing, castManager, i18n]);
 
     /**
      * Handle adding a manual FCast device
@@ -584,6 +637,8 @@ const MainContent: React.FC = () => {
                         header: (props) => <CustomAppBar
                             {...props}
                             onButtonCastPressed={buttonCastPressed}
+                            onScreenSharePressed={handleScreenSharePressed}
+                            isScreenSharing={screenSharing}
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}

@@ -250,5 +250,8 @@
     "onError": "On Error",
     "errorContainer": "Error Container",
     "onErrorContainer": "On Error Container"
-  }
+  },
+  "screen_share_started": "Screen sharing started",
+  "screen_share_stopped": "Screen sharing stopped",
+  "screen_share_failed": "Screen share failed"
 }

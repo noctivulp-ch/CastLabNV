@@ -12,6 +12,8 @@ import {useCastManager} from "../../contexts/castManager-context";
 interface CustomAppBarProps {
     castManager: CastManager;
     onButtonCastPressed?: () => Promise<void>;
+    onScreenSharePressed?: () => void;
+    isScreenSharing?: boolean;
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
@@ -26,6 +28,8 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 options,
                                                                                 themePressed,
                                                                                 onButtonCastPressed,
+                                                                                onScreenSharePressed,
+                                                                                isScreenSharing,
                                                                                 onPlaylistsPressed,
                                                                                 onVideoExtractorPressed,
                                                                                 onThemeCustomizerPressed,
@@ -150,6 +154,16 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                 navigation.goBack();
             }}/>}
             <Appbar.Content title={title}/>
+
+            {/* Screen share button — visible on Android, grayed out when not connected */}
+            {!hideCastAndMenu && Platform.OS === 'android' && (
+                <Appbar.Action
+                    icon={isScreenSharing ? 'monitor-share' : 'monitor'}
+                    onPress={onScreenSharePressed}
+                    disabled={!isConnected}
+                    color={isScreenSharing ? theme.colors.primary : undefined}
+                />
+            )}
 
             {/* Only show cast button if not in hidden screens */}
             {!hideCastAndMenu && castIcon && (

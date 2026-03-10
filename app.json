@@ -89,7 +89,8 @@
       ],
       "expo-asset",
       "expo-sqlite",
-      "expo-localization"
+      "expo-localization",
+      "./modules/expo-screen-share/app.plugin.js"
     ],
     "notification": {
       "icon": "./assets/notification.png",
