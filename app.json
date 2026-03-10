@@ -90,7 +90,8 @@
       "expo-asset",
       "expo-sqlite",
       "expo-localization",
-      "./modules/expo-screen-share/app.plugin.js"
+      "./modules/expo-screen-share/app.plugin.js",
+      "expo-video"
     ],
     "notification": {
       "icon": "./assets/notification.png",

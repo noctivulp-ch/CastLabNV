@@ -25,6 +25,7 @@ import migrations from "../../drizzle/migrations";
 import * as SQLite from "expo-sqlite";
 import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
+import ExternalDisplayRenderer from "../componants/player/ExternalDisplayRenderer";
 import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
 import * as FileSystem from 'expo-file-system/legacy';
@@ -863,6 +864,9 @@ const MainContent: React.FC = () => {
                 onLoadMoreAssets={handleLoadMoreAssets}
                 onToggleCompactMode={handleToggleCompactMode}
             />
+            {/* External display renderer */}
+            <ExternalDisplayRenderer/>
+
             {/* Theme selection dialog */}
             <Portal>
                 <Dialog visible={themeDialogVisible} onDismiss={() => setThemeDialogVisible(false)}>

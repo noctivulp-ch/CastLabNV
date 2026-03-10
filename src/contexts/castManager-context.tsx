@@ -1,6 +1,7 @@
 import React, {createContext, Dispatch, ReactNode, useContext, useEffect, useReducer} from "react";
 import {CastManager, PlaybackState} from "../DLNACast/CastManager";
 import {Device} from "../DLNACast/types/Device";
+import {MediaInfo} from "../DLNACast/types/MediaInfo";
 import {CastConfig} from "../DLNACast/config/CastConfig";
 import {useDispatch} from 'react-redux';
 import {clearCast, setCurrentAsset} from '../store/slice/castSlice';
@@ -22,6 +23,7 @@ interface CastState {
     playbackState: PlaybackState;
     isSearching: boolean;
     castingStarted: boolean;
+    currentMediaInfo: MediaInfo | null;
 }
 
 // Action types
@@ -37,7 +39,8 @@ type CastAction =
     | { type: 'SEARCH_STARTED' }
     | { type: 'SEARCH_STOPPED' }
     | { type: 'CASTING_STARTED' }
-    | { type: 'CASTING_STOPPED' };
+    | { type: 'CASTING_STOPPED' }
+    | { type: 'MEDIA_CAST'; mediaInfo: MediaInfo };
 
 // Initial state
 const initialState: CastState = {
@@ -55,6 +58,7 @@ const initialState: CastState = {
     },
     isSearching: false,
     castingStarted: false,
+    currentMediaInfo: null,
 };
 
 // Reducer function
@@ -125,7 +129,7 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
             return {
                 ...state,
                 isSearching: true,
-                devices: [], // Clear devices when starting new search
+                devices: state.devices.filter(d => d.protocol === 'external-display'), // Keep external displays
                 error: null, // Clear any search-related errors
             };
 
@@ -149,6 +153,12 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
                 progress: 0,
             };
 
+        case 'MEDIA_CAST':
+            return {
+                ...state,
+                currentMediaInfo: action.mediaInfo,
+            };
+
         default:
             return state;
     }
@@ -165,6 +175,8 @@ interface CastManagerContextProps {
     progress: number;
     error: string | null;
     playbackState: PlaybackState;
+    currentMediaInfo: MediaInfo | null;
+    isExternalDisplay: boolean;
 
     // Actions
     castManager: CastManager;
@@ -251,6 +263,10 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         dispatch({type: 'CASTING_STOPPED'});
     };
 
+    const onMediaCast = (mediaInfo: MediaInfo) => {
+        dispatch({type: 'MEDIA_CAST', mediaInfo});
+    };
+
     // Helper functions
     const clearError = () => {
         dispatch({type: 'CLEAR_ERROR'});
@@ -277,6 +293,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
             'castingStopped': onCastingStopped,
             'deviceCapabilityUpdated': onDeviceCapabilityUpdated,
             'mediaCleared': onMediaCleared,
+            'mediaCast': onMediaCast,
         };
 
         // Add all listeners
@@ -309,6 +326,8 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         progress: state.progress,
         error: state.error,
         playbackState: state.playbackState,
+        currentMediaInfo: state.currentMediaInfo,
+        isExternalDisplay: state.connectedDevice?.protocol === 'external-display',
 
         // Actions
         castManager,

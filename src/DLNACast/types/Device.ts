@@ -1,4 +1,4 @@
-export type DeviceProtocol = 'dlna' | 'fcast';
+export type DeviceProtocol = 'dlna' | 'fcast' | 'external-display';
 
 export interface Device {
     id: string;

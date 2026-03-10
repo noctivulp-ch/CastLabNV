@@ -11,6 +11,7 @@ import {CastConfig} from './config/CastConfig';
 import {LogService} from '../services/LogService';
 import {FCastClient, FCAST_PORT} from './FCastClient';
 import Zeroconf from 'react-native-zeroconf';
+import {ExternalDisplayController} from './types/ExternalDisplayController';
 
 // Constants for SSDP discovery (from config)
 const MULTICAST_ADDRESS = CastConfig.MULTICAST_ADDRESS;
@@ -60,6 +61,8 @@ export class CastManager extends EventEmitter {
     private intentionalDisconnect = false;
     private static readonly FCAST_MAX_RECONNECT = 3;
     private static readonly FCAST_RECONNECT_DELAY = 3000;
+    private externalDisplayController: ExternalDisplayController | null = null;
+    private externalDisplayState: PlaybackState = {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
 
     constructor() {
         super();
@@ -107,6 +110,49 @@ export class CastManager extends EventEmitter {
      */
     private isFCastDevice(): boolean {
         return this.currentDevice?.protocol === 'fcast';
+    }
+
+    private isExternalDisplayDevice(): boolean {
+        return this.currentDevice?.protocol === 'external-display';
+    }
+
+    setExternalDisplayController(controller: ExternalDisplayController | null): void {
+        this.externalDisplayController = controller;
+    }
+
+    updateExternalDisplayState(state: PlaybackState): void {
+        this.externalDisplayState = state;
+        this.emit('stateChanged', state);
+        this.emit('progressChanged', state.position);
+    }
+
+    addExternalDisplay(screenId: string, name: string): void {
+        const deviceId = `display-${screenId}`;
+        if (this.devices.has(deviceId)) return;
+        const device: Device = {
+            id: deviceId,
+            name,
+            location: '',
+            ip: '',
+            port: 0,
+            services: {},
+            protocol: 'external-display',
+        };
+        this.devices.set(deviceId, device);
+        LogService.info('ExternalDisplay', `Screen detected: ${name}`);
+        this.emit('deviceAdded', device);
+    }
+
+    removeExternalDisplay(screenId: string): void {
+        const deviceId = `display-${screenId}`;
+        this.devices.delete(deviceId);
+        if (this.currentDevice?.id === deviceId) {
+            this.currentDevice = null;
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('disconnected');
+            this.emit('mediaCleared');
+        }
     }
 
     /**
@@ -265,7 +311,21 @@ export class CastManager extends EventEmitter {
 
         this.emit('searchStarted');
         this.searching = true;
+        // Preserve external display devices during search
+        const externalDisplays = Array.from(this.devices.entries())
+            .filter(([_, d]) => d.protocol === 'external-display');
         this.devices.clear();
+        for (const [id, device] of externalDisplays) {
+            this.devices.set(id, device);
+        }
+        // Re-emit after searchStarted has been processed by reducer
+        if (externalDisplays.length > 0) {
+            setTimeout(() => {
+                for (const [_, device] of externalDisplays) {
+                    this.emit('deviceAdded', device);
+                }
+            }, 0);
+        }
         this.pendingLocations.clear();
 
         // Resolve WiFi IP for multicast interface binding
@@ -367,7 +427,11 @@ export class CastManager extends EventEmitter {
      */
     async connect(device: Device): Promise<void> {
         try {
-            if (device.protocol === 'fcast') {
+            if (device.protocol === 'external-display') {
+                this.currentDevice = device;
+                LogService.info('ExternalDisplay', `Connected to ${device.name}`);
+                this.emit('connected', device);
+            } else if (device.protocol === 'fcast') {
                 // FCast connection via TCP
                 this.fcastClient = new FCastClient(device.ip, device.port);
 
@@ -422,6 +486,17 @@ export class CastManager extends EventEmitter {
             return;
         }
 
+        if (this.isExternalDisplayDevice()) {
+            if (this.externalDisplayController) {
+                this.externalDisplayController.stop();
+            }
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+            return;
+        }
+
         if (this.isFCastDevice() && this.fcastClient) {
             try {
                 await this.fcastClient.stop();
@@ -462,7 +537,16 @@ export class CastManager extends EventEmitter {
         }
 
         try {
-            if (this.isFCastDevice() && this.fcastClient) {
+            if (this.isExternalDisplayDevice()) {
+                if (this.externalDisplayController) {
+                    this.externalDisplayController.stop();
+                }
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            } else if (this.isFCastDevice() && this.fcastClient) {
                 this.intentionalDisconnect = true;
                 this.cancelFCastReconnect();
                 await this.fcastClient.stop();
@@ -517,7 +601,12 @@ export class CastManager extends EventEmitter {
         this.currentMediaUri = mediaInfo.contentUrl;
 
         try {
-            if (this.isFCastDevice() && this.fcastClient) {
+            if (this.isExternalDisplayDevice()) {
+                LogService.info('ExternalDisplay', `Casting: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
+                this.emit('mediaCast', mediaInfo);
+                this.emit('progressChanged', 0);
+                this.emit('castingStarted');
+            } else if (this.isFCastDevice() && this.fcastClient) {
                 // FCast protocol
                 await this.fcastClient.play(mediaInfo);
                 this.emit('progressChanged', 0);
@@ -567,6 +656,12 @@ export class CastManager extends EventEmitter {
     async seek(position: number): Promise<void> {
         if (!this.currentDevice) {
             this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.seek(position);
+            this.emit('progressChanged', position);
             return;
         }
 
@@ -670,6 +765,10 @@ export class CastManager extends EventEmitter {
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
 
+        if (this.isExternalDisplayDevice()) {
+            return this.externalDisplayState;
+        }
+
         if (this.isFCastDevice() && this.fcastClient) {
             // FCast pushes updates via events; return last known state
             return this.fcastClient.getPlaybackState();
@@ -731,6 +830,11 @@ export class CastManager extends EventEmitter {
             return;
         }
 
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.mute(muted);
+            return;
+        }
+
         if (this.isFCastDevice() && this.fcastClient) {
             // FCast doesn't have a dedicated mute opcode; set volume to 0 or restore
             await this.fcastClient.setVolume(muted ? 0 : 0.5);
@@ -751,6 +855,11 @@ export class CastManager extends EventEmitter {
     async setVolume(volume: number): Promise<void> {
         if (!this.currentDevice) {
             this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.setVolume(volume);
             return;
         }
 
@@ -775,6 +884,11 @@ export class CastManager extends EventEmitter {
             return;
         }
 
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.pause();
+            return;
+        }
+
         if (this.isFCastDevice() && this.fcastClient) {
             this.fcastClient.pause().catch((err) => {
                 this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
@@ -795,6 +909,11 @@ export class CastManager extends EventEmitter {
     async play(): Promise<void> {
         if (!this.currentDevice) {
             this.emit('error', this.i18n.t('error.noDevice'));
+            return;
+        }
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.play();
             return;
         }
 
