@@ -286,7 +286,7 @@ export class CastManager extends EventEmitter {
             } catch (err) {
                 LogService.warn('Multicast', `addMembership with interface failed, retrying without: ${err}`);
                 try {
-                    this.socket.addMembership(MULTICAST_ADDRESS);
+                    this.socket.addMembership(MULTICAST_ADDRESS, null);
                 } catch (err2) {
                     LogService.warn('Multicast', `Multicast group join failed: ${err2}`);
                 }
@@ -526,7 +526,9 @@ export class CastManager extends EventEmitter {
                 // DLNA protocol
                 this.soapCache.clear();
                 const didlMetadata = this.buildDIDLMetadata(mediaInfo);
+                LogService.info('Cast', `SetAVTransportURI: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
                 await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
+                LogService.info('Cast', 'Play command sent');
                 await this.dlnaPlay();
                 this.startHeartbeat();
                 this.emit('progressChanged', 0);
@@ -1484,8 +1486,7 @@ ${body}
             protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=${mimeType.includes('jpeg') ? 'JPEG_SM' : 'PNG_LRG'};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000`;
         } else if (mimeType.includes('video')) {
             upnpClass = 'object.item.videoItem';
-            // Use specific DLNA profile for MP4 (H.264/AAC is common)
-            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MPEG4_P2_MP4_ASP_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
 
             // Add duration if available
             if (mediaInfo.streamDuration) {
@@ -1500,7 +1501,7 @@ ${body}
             }
         } else if (mimeType.includes('audio')) {
             upnpClass = 'object.item.audioItem.musicTrack';
-            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000`;
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000`;
         }
 
         // Use metadata.title if available, fallback to filename from contentUrl

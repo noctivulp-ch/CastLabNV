@@ -523,13 +523,13 @@ const MainContent: React.FC = () => {
                 console.log(`Main: Starting media server on ${ip}:${SERVER_PORT}`);
 
                 // DLNA server configuration with proper headers
-                const extraConfig = `server.modules += ("mod_setenv")
+                const extraConfig = `server.range-requests = "enable"
+                    server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
                         "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000000000",
                         "Access-Control-Allow-Origin" => "*",
-                        "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD",
-                        "Accept-Ranges" => "bytes"
+                        "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD"
                     )
                     server.modules += ("mod_dirlisting")
                     dir-listing.activate="enable"`;
