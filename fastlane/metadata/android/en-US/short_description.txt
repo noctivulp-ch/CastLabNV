@@ -1,1 +1,1 @@
-CastLab: Cast gallery media to DLNA/UPnP devices with playlist support
+Cast your media to DLNA/UPnP and FCast devices

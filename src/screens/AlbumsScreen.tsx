@@ -93,25 +93,31 @@ const AlbumsScreen = forwardRef<AlbumsScreenRef, AlbumsProps>(({
     const detectAlbumMediaTypes = useCallback(async (albumList: Album[]) => {
         const types: Record<string, Set<string>> = {};
         const validAlbumIds = new Set<string>();
-        await Promise.all(albumList.map(async (album) => {
-            const mediaTypes = new Set<string>();
-            const checks = (['photo', 'video', 'audio'] as MediaLibrary.MediaTypeValue[]).map(async (type) => {
-                const result = await MediaLibrary.getAssetsAsync({
-                    album: album.id,
-                    mediaType: type,
-                    first: 10,
+        // Process albums in batches to avoid blocking the UI
+        const batchSize = 5;
+        for (let i = 0; i < albumList.length; i += batchSize) {
+            const batch = albumList.slice(i, i + batchSize);
+            await Promise.all(batch.map(async (album) => {
+                const mediaTypes = new Set<string>();
+                const checks = (['photo', 'video', 'audio'] as MediaLibrary.MediaTypeValue[]).map(async (type) => {
+                    const result = await MediaLibrary.getAssetsAsync({
+                        album: album.id,
+                        mediaType: type,
+                        first: 1,
+                    });
+                    if (result.assets.length > 0 && isRealMedia(result.assets[0])) {
+                        mediaTypes.add(type);
+                    }
                 });
-                const realAssets = result.assets.filter(isRealMedia);
-                if (realAssets.length > 0) {
-                    mediaTypes.add(type);
+                await Promise.all(checks);
+                types[album.id] = mediaTypes;
+                if (mediaTypes.size > 0) {
+                    validAlbumIds.add(album.id);
                 }
-            });
-            await Promise.all(checks);
-            types[album.id] = mediaTypes;
-            if (mediaTypes.size > 0) {
-                validAlbumIds.add(album.id);
-            }
-        }));
+            }));
+            // Yield to UI between batches
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+        }
         setAlbumMediaTypes(types);
         setValidAlbums(validAlbumIds);
     }, []);
