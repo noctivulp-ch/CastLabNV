@@ -38,24 +38,24 @@ const CombinedDarkTheme = merge({...MD3DarkTheme, colors: darkColors.colors}, {
  * Automatically detects if it should be a dark or light theme based on background color
  */
 const createCustomTheme = (customColors: any) => {
-    // Ensure elevation properties exist
-    const elevation = {
+    // Determine if we should use dark or light base theme
+    const isDark = customColors.background ? isColorDark(customColors.background) : false;
+    const baseTheme = isDark ? MD3DarkTheme : MD3LightTheme;
+
+    // Use provided elevation or generate from surface colors
+    const elevation = customColors.elevation || {
         level0: 'transparent',
-        level1: customColors.surface || 'rgb(255, 255, 255)',
-        level2: customColors.surfaceVariant || 'rgb(242, 242, 242)',
-        level3: customColors.surfaceVariant || 'rgb(238, 238, 238)',
-        level4: customColors.surfaceVariant || 'rgb(234, 234, 234)',
-        level5: customColors.surfaceVariant || 'rgb(230, 230, 230)',
+        level1: customColors.surface || baseTheme.colors.elevation.level1,
+        level2: customColors.surfaceVariant || baseTheme.colors.elevation.level2,
+        level3: customColors.surfaceVariant || baseTheme.colors.elevation.level3,
+        level4: customColors.surfaceVariant || baseTheme.colors.elevation.level4,
+        level5: customColors.surfaceVariant || baseTheme.colors.elevation.level5,
     };
 
     const mergedColors = {
         ...customColors,
         elevation,
     };
-
-    // Determine if we should use dark or light base theme
-    const isDark = customColors.background ? isColorDark(customColors.background) : false;
-    const baseTheme = isDark ? MD3DarkTheme : MD3LightTheme;
     const baseNavTheme = isDark ? DarkTheme : LightTheme;
 
     return merge({...baseTheme, colors: mergedColors}, {
@@ -203,15 +203,26 @@ function ThemeContextProvider({children}: any) {
  * Determine if a color is dark based on luminance
  */
 export function isColorDark(color: string): boolean {
-    // Parse rgb color string
-    const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-    if (!match) return false;
+    let r: number, g: number, b: number;
 
-    const [, r, g, b] = match.map(Number);
+    // Parse rgb(r, g, b) format
+    const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    if (rgbMatch) {
+        [, r, g, b] = rgbMatch.map(Number);
+    }
+    // Parse hex format (#RGB, #RRGGBB)
+    else if (color.startsWith('#')) {
+        const hex = color.length === 4
+            ? color[1] + color[1] + color[2] + color[2] + color[3] + color[3]
+            : color.slice(1, 7);
+        r = parseInt(hex.substring(0, 2), 16);
+        g = parseInt(hex.substring(2, 4), 16);
+        b = parseInt(hex.substring(4, 6), 16);
+    } else {
+        return false;
+    }
 
-    // Calculate relative luminance
     const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
     return luminance < 0.5;
 }
 

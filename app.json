@@ -2,13 +2,13 @@
   "expo": {
     "name": "CastLab",
     "slug": "CastLab",
-    "version": "1.0.7",
+    "version": "1.1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "buildNumber": "1.0.7",
+      "buildNumber": "1.1.0",
       "supportsTablet": true,
       "bundleIdentifier": "app.fedilab.castlab",
       "infoPlist": {
@@ -24,8 +24,7 @@
       }
     },
     "android": {
-      "versionCode": 7,
-      "edgeToEdgeEnabled": true,
+      "versionCode": 10,
       "blockedPermissions": [],
       "adaptiveIcon": {
         "backgroundColor": "#000000",
@@ -89,7 +88,10 @@
         }
       ],
       "expo-asset",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-localization",
+      "./modules/expo-screen-share/app.plugin.js",
+      "expo-video"
     ],
     "notification": {
       "icon": "./assets/notification.png",

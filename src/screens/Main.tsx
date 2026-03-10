@@ -25,19 +25,24 @@ import migrations from "../../drizzle/migrations";
 import * as SQLite from "expo-sqlite";
 import {drizzle} from "drizzle-orm/expo-sqlite";
 import PlayerController from "../componants/player/PlayerController";
+import ExternalDisplayRenderer from "../componants/player/ExternalDisplayRenderer";
 import {useCastManager} from "../contexts/castManager-context";
 import Toast from "../componants/alert/Toast";
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import {Asset as ExpoAsset} from 'expo-asset';
 import {useBackgroundNotification} from '../hooks/useBackgroundNotification';
 import {activateKeepAwakeAsync, deactivateKeepAwake} from "expo-keep-awake";
-import castReducer, {setCurrentAsset} from "../store/slice/castSlice";
+import * as DocumentPicker from 'expo-document-picker';
+import castReducer, {addToAssets, setCurrentAsset} from "../store/slice/castSlice";
 import PlaylistsScreen, {PlaylistsScreenRef} from "../screens/PlaylistsScreen";
 import PlaylistEditScreen from "../screens/PlaylistEditScreen";
 import MediaSelectorScreen from "../screens/MediaSelectorScreen";
 import VideoExtractorScreen from "./VideoExtractorScreen";
 import AboutScreen from "./AboutScreen";
 import ThemeCustomizerScreen from "./ThemeCustomizerScreen";
+import {CastUtils} from "../DLNACast/utils/CastUtils";
+import * as ScreenShare from '../../modules/expo-screen-share/src';
+import {SCREEN_SHARE_PORT} from "../constants/Values";
 
 const rootReducer = combineReducers({
     cast: castReducer,
@@ -60,23 +65,19 @@ export type IRootState = ReturnType<typeof rootReducer>;
 // Navigation parameter types
 export type RootStackParamList = {
     Albums: { playerHeight?: number };
-    Album: { album: Album, videoOnly: boolean, playerHeight?: number };
+    Album: { album: Album, videoOnly: boolean, playerHeight?: number, initialMediaType?: string };
     Playlists: { playerHeight?: number };
     PlaylistEdit: {
         playlistId: number;
         isNew?: boolean;
+        playlistName?: string;
     };
     MediaSelector: {
-        onSelectAssets: (assets: Asset[]) => void;
-        excludeAssets?: Asset[];
         allowMultiple?: boolean;
-        playlistName?: string;
-        playlistId?: number;
+        playlistId: number;
     };
     VideoExtractor: { playerHeight?: number };
     ThemeCustomizer: {};
-    PictureAlbums: any;
-    VideoAlbums: any;
     About: undefined;
 }
 
@@ -96,7 +97,9 @@ const MainContent: React.FC = () => {
     const [alertMessage, setAlertMessage] = useState<string>("");
     const [toastText1, setToastText1] = useState<string>("");
     const [toastText2, setToastText2] = useState<string>("");
+    const [toastType, setToastType] = useState<"info" | "error">("info");
     const [castDialogVisible, setCastDialogVisible] = useState(false);
+    const [screenSharing, setScreenSharing] = useState(false);
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
@@ -121,6 +124,21 @@ const MainContent: React.FC = () => {
     // Server management
     const serverRef = useRef<StaticServer | null>(null);
 
+    // Toast helpers
+    const showInfoToast = useCallback((text1: string, text2 = "") => {
+        setToastType("info");
+        setToastText1(text1);
+        setToastText2(text2);
+        setToastVisible(true);
+    }, []);
+
+    const showErrorToast = useCallback((text1: string, text2 = "") => {
+        setToastType("error");
+        setToastText1(text1);
+        setToastText2(text2);
+        setToastVisible(true);
+    }, []);
+
     // Initialize background notifications
     useBackgroundNotification();
 
@@ -134,12 +152,10 @@ const MainContent: React.FC = () => {
     // Handle cast manager errors with toast notifications
     useEffect(() => {
         if (error) {
-            setToastText1(error);
             console.error(error);
-            setToastText2("");
-            setToastVisible(true);
+            showErrorToast(error);
         }
-    }, [error]);
+    }, [error, showErrorToast]);
 
     // Update player visibility based on connected device
     useEffect(() => {
@@ -164,9 +180,7 @@ const MainContent: React.FC = () => {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
                         // Show error toast for file copy failures
-                        setToastText1(i18n.t('failed_to_prepare_media_file'));
-                        setToastText2(i18n.t('check_storage_permissions_and_try_again'));
-                        setToastVisible(true);
+                        showErrorToast(i18n.t('failed_to_prepare_media_file'), i18n.t('check_storage_permissions_and_try_again'));
                         return;
                     }
                 }
@@ -190,15 +204,14 @@ const MainContent: React.FC = () => {
                         // Start casting the new media
                         await castManager.castMedia({
                             contentUrl: uri,
+                            contentType: CastUtils.getMimeTypeFromUrl(asset.filename),
                             metadata,
                             streamDuration: asset.duration || (isImage ? 0 : undefined),
                         });
 
                         // Show success toast for first media or when manually selecting
                         if (cast.assets.length === 1 || cast.currentIndex === 0) {
-                            setToastText1(i18n.t('now_casting', {filename: asset.filename}));
-                            setToastText2(connectedDevice?.name || "");
-                            setToastVisible(true);
+                            showInfoToast(i18n.t('now_casting', {filename: asset.filename}), connectedDevice?.name || "");
                         }
 
                     } catch (castError) {
@@ -208,9 +221,7 @@ const MainContent: React.FC = () => {
                         // Show error toast for casting failures
                         const errorMessage = (castError as Error).message;
                         if (!errorMessage.includes('No device connected')) {
-                            setToastText1(i18n.t('failed_to_cast_media'));
-                            setToastText2(errorMessage || i18n.t('unknown_error'));
-                            setToastVisible(true);
+                            showErrorToast(i18n.t('failed_to_cast_media'), errorMessage || i18n.t('unknown_error'));
                         }
                     }
                 }
@@ -293,17 +304,13 @@ const MainContent: React.FC = () => {
             setCastDialogVisible(false);
 
             // Show connection success toast
-            setToastText1(i18n.t('connected_to_device', {deviceName: device.name}));
-            setToastText2(i18n.t('ready_to_cast_media'));
-            setToastVisible(true);
+            showInfoToast(i18n.t('connected_to_device', {deviceName: device.name}), i18n.t('ready_to_cast_media'));
 
         } catch (connectError) {
             console.error('Main: Failed to connect to device:', connectError);
 
             // Show connection error toast
-            setToastText1(i18n.t('failed_to_connect_to_device', {deviceName: device.name}));
-            setToastText2((connectError as Error).message || i18n.t('connection_failed'));
-            setToastVisible(true);
+            showErrorToast(i18n.t('failed_to_connect_to_device', {deviceName: device.name}), (connectError as Error).message || i18n.t('connection_failed'));
         }
     }, [castManager, i18n]);
 
@@ -316,15 +323,11 @@ const MainContent: React.FC = () => {
                 await castManager.disconnect();
 
                 // Show disconnection toast
-                setToastText1(i18n.t('disconnected_from_cast_device'));
-                setToastText2("");
-                setToastVisible(true);
+                showInfoToast(i18n.t('disconnected_from_cast_device'));
 
             } catch (disconnectError) {
                 console.error('Main: Failed to disconnect:', disconnectError);
-                setToastText1(i18n.t('failed_to_disconnect'));
-                setToastText2((disconnectError as Error).message || i18n.t('disconnect_failed'));
-                setToastVisible(true);
+                showErrorToast(i18n.t('failed_to_disconnect'), (disconnectError as Error).message || i18n.t('disconnect_failed'));
             }
         } else {
             if (castManager.isSearching()) {
@@ -334,6 +337,63 @@ const MainContent: React.FC = () => {
             setCastDialogVisible(true);
         }
     };
+
+    /**
+     * Handle screen share button press
+     */
+    const handleScreenSharePressed = useCallback(async () => {
+        if (Platform.OS !== 'android') return;
+
+        if (screenSharing) {
+            await ScreenShare.stopScreenShare();
+            setScreenSharing(false);
+            try {
+                await castManager.stop();
+            } catch (_) {}
+            showInfoToast(i18n.t('screen_share_stopped'));
+            return;
+        }
+
+        const startSub = ScreenShare.addScreenShareListener('onScreenShareStarted', async (payload) => {
+            setScreenSharing(true);
+            startSub.remove();
+            try {
+                const ip = await Network.getIpAddressAsync();
+                const streamUrl = `http://${ip}:${SCREEN_SHARE_PORT}/stream`;
+                await castManager.castMedia({
+                    contentUrl: streamUrl,
+                    contentType: 'video/mp2t',
+                    metadata: {title: 'Screen Share', type: 'movie', images: []},
+                });
+                showInfoToast(i18n.t('screen_share_started'));
+            } catch (e) {
+                showErrorToast(i18n.t('screen_share_failed'), (e as Error).message);
+                await ScreenShare.stopScreenShare();
+                setScreenSharing(false);
+            }
+        });
+
+        const errorSub = ScreenShare.addScreenShareListener('onScreenShareError', (payload) => {
+            errorSub.remove();
+            startSub.remove();
+            showErrorToast(i18n.t('screen_share_failed'), payload.error);
+        });
+
+        try {
+            await ScreenShare.requestScreenShare(SCREEN_SHARE_PORT);
+        } catch (e) {
+            startSub.remove();
+            errorSub.remove();
+            showErrorToast(i18n.t('screen_share_failed'), (e as Error).message);
+        }
+    }, [screenSharing, castManager, i18n]);
+
+    /**
+     * Handle adding a manual FCast device
+     */
+    const handleAddFCastDevice = useCallback((ip: string, port: number, name?: string) => {
+        castManager.addFCastDevice(ip, port, name);
+    }, [castManager]);
 
     /**
      * Handle playlists button press - navigate to playlists screen
@@ -358,6 +418,53 @@ const MainContent: React.FC = () => {
     const handleVideoExtractorPressed = useCallback((navigation: NavigationProp<RootStackParamList>) => {
         navigation.navigate('VideoExtractor', {});
     }, []);
+
+    /**
+     * Handle open file button press - pick files via native file picker and cast them
+     */
+    const handleOpenFile = useCallback(async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['video/*', 'audio/*', 'image/*'],
+                multiple: true,
+                copyToCacheDirectory: true,
+            });
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            const pickedAssets: Asset[] = result.assets.map((file) => {
+                let mediaType: 'photo' | 'video' | 'audio' = 'video';
+                if (file.mimeType?.startsWith('image/')) {
+                    mediaType = 'photo';
+                } else if (file.mimeType?.startsWith('audio/')) {
+                    mediaType = 'audio';
+                }
+
+                return {
+                    id: `file-${Date.now()}-${file.name}`,
+                    filename: file.name,
+                    uri: file.uri,
+                    mediaType,
+                    width: 0,
+                    height: 0,
+                    duration: 0,
+                    creationTime: Date.now(),
+                    modificationTime: Date.now(),
+                    albumId: '',
+                } as Asset;
+            });
+
+            if (pickedAssets.length > 0) {
+                dispatch(addToAssets(pickedAssets));
+                dispatch(setCurrentAsset(pickedAssets[0]));
+            }
+        } catch (error) {
+            console.error('Main: File picker error:', error);
+            showErrorToast(i18n.t('no_files_selected'));
+        }
+    }, [dispatch, i18n, showErrorToast]);
 
 
     /**
@@ -417,13 +524,13 @@ const MainContent: React.FC = () => {
                 console.log(`Main: Starting media server on ${ip}:${SERVER_PORT}`);
 
                 // DLNA server configuration with proper headers
-                const extraConfig = `server.modules += ("mod_setenv")
+                const extraConfig = `server.range-requests = "enable"
+                    server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
                         "contentFeatures.dlna.org" => "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=017000 00000000000000000000000000000000",
                         "Access-Control-Allow-Origin" => "*",
-                        "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD",
-                        "Accept-Ranges" => "bytes"
+                        "Access-Control-Allow-Methods" => "GET, POST, PUT, DELETE, OPTIONS, HEAD"
                     )
                     server.modules += ("mod_dirlisting")
                     dir-listing.activate="enable"`;
@@ -474,9 +581,7 @@ const MainContent: React.FC = () => {
                 console.error('Main: Error starting servers:', (err as Error).message);
 
                 // Show server start error toast
-                setToastText1(i18n.t('failed_to_start_media_server'));
-                setToastText2(i18n.t('media_casting_may_not_work_properly'));
-                setToastVisible(true);
+                showErrorToast(i18n.t('failed_to_start_media_server'), i18n.t('media_casting_may_not_work_properly'));
             }
         };
 
@@ -530,9 +635,12 @@ const MainContent: React.FC = () => {
                         header: (props) => <CustomAppBar
                             {...props}
                             onButtonCastPressed={buttonCastPressed}
+                            onScreenSharePressed={handleScreenSharePressed}
+                            isScreenSharing={screenSharing}
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}
+                            onOpenFilePressed={handleOpenFile}
                             castManager={castManager}
                             themePressed={displayThemePicker}
                         />,
@@ -642,7 +750,7 @@ const MainContent: React.FC = () => {
                         name="PlaylistEdit"
                         options={({route}) => ({
                             headerShown: true,
-                            title: route.params?.playlist?.name || i18n.t('edit_playlist'),
+                            title: route.params?.playlistName || i18n.t('edit_playlist'),
                             headerStyle: {
                                 backgroundColor: theme.colors.surface,
                             },
@@ -733,14 +841,17 @@ const MainContent: React.FC = () => {
                 devicePressed={devicePressedHandler}
                 visible={castDialogVisible}
                 hide={() => setCastDialogVisible(false)}
+                onAddFCastDevice={handleAddFCastDevice}
             />
 
             {/* Toast notifications with enhanced messages */}
             <Toast
-                type={"info"}
+                type={toastType}
                 text1={toastText1}
                 text2={toastText2}
                 visible={toastVisible}
+                time={toastType === "error" ? 5000 : 2000}
+                bottomOffset={playerVisible ? playerHeight + 20 : 40}
                 onToastHide={() => setToastVisible(false)}
             />
 
@@ -753,6 +864,9 @@ const MainContent: React.FC = () => {
                 onLoadMoreAssets={handleLoadMoreAssets}
                 onToggleCompactMode={handleToggleCompactMode}
             />
+            {/* External display renderer */}
+            <ExternalDisplayRenderer/>
+
             {/* Theme selection dialog */}
             <Portal>
                 <Dialog visible={themeDialogVisible} onDismiss={() => setThemeDialogVisible(false)}>

@@ -22,6 +22,7 @@ import {getPlayList, insertOrUpdatePlayList} from '../../db/playlistDB';
 import {initTranslate} from '../localization/translate';
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {EventBus} from '../services/EventBus';
 import DraggableFlatList, {RenderItemParams, ScaleDecorator} from 'react-native-draggable-flatlist';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 
@@ -31,7 +32,6 @@ type RootStackParamList = {
         isNew?: boolean;
     };
     MediaSelector: {
-        onSelectAssets: (assets: Asset[]) => void;
         allowMultiple?: boolean;
         playlistId: number;
     };
@@ -303,14 +303,19 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
     }, []);
 
     /**
-     * Assets selected from MediaSelector
+     * Listen for assets selected from MediaSelector via EventBus
      */
-    const assetsSelected = useCallback((data: Asset[]) => {
-        setPlaylist(prev => ({
-            ...prev,
-            assets: [...(prev.assets ?? []), ...data]
-        }));
-        setHasChanges(true);
+    useEffect(() => {
+        const subscription = EventBus.onAssetsSelected((data: Asset[]) => {
+            if (data && data.length > 0) {
+                setPlaylist(prev => ({
+                    ...prev,
+                    assets: [...(prev.assets ?? []), ...data]
+                }));
+                setHasChanges(true);
+            }
+        });
+        return () => subscription.remove();
     }, []);
 
     /**
@@ -318,12 +323,10 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
      */
     const handleAddMedia = useCallback(() => {
         (navigation as any).navigate('MediaSelector', {
-            onSelectAssets: assetsSelected,
             allowMultiple: true,
-            playlistName: playlist.name,
             playlistId: playlistId
         });
-    }, [navigation, playlist.name, playlistId, assetsSelected]);
+    }, [navigation, playlistId]);
 
     /**
      * Format duration for display

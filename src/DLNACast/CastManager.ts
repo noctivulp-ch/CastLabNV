@@ -8,6 +8,10 @@ import {Buffer} from 'buffer';
 import {initTranslate} from "../localization/translate";
 import {CastUtils} from './utils/CastUtils';
 import {CastConfig} from './config/CastConfig';
+import {LogService} from '../services/LogService';
+import {FCastClient, FCAST_PORT} from './FCastClient';
+import Zeroconf from 'react-native-zeroconf';
+import {ExternalDisplayController} from './types/ExternalDisplayController';
 
 // Constants for SSDP discovery (from config)
 const MULTICAST_ADDRESS = CastConfig.MULTICAST_ADDRESS;
@@ -48,6 +52,17 @@ export class CastManager extends EventEmitter {
     private soapCache = new Map<string, CacheEntry>(); // SOAP response cache
     private currentPollInterval = CastConfig.DEFAULT_POLL_INTERVAL;
     private heartbeatInterval: NodeJS.Timeout | null = null; // Heartbeat to maintain the connection
+    private searchRetryTimers: NodeJS.Timeout[] = []; // Timers for M-SEARCH retries
+    private pendingLocations: Set<string> = new Set(); // Track locations being processed to avoid duplicates
+    private fcastClient: FCastClient | null = null; // FCast protocol client
+    private zeroconf: Zeroconf | null = null;
+    private fcastReconnectAttempts = 0;
+    private fcastReconnectTimer: NodeJS.Timeout | null = null;
+    private intentionalDisconnect = false;
+    private static readonly FCAST_MAX_RECONNECT = 3;
+    private static readonly FCAST_RECONNECT_DELAY = 3000;
+    private externalDisplayController: ExternalDisplayController | null = null;
+    private externalDisplayState: PlaybackState = {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
 
     constructor() {
         super();
@@ -91,6 +106,186 @@ export class CastManager extends EventEmitter {
     }
 
     /**
+     * Checks if the current device uses the FCast protocol.
+     */
+    private isFCastDevice(): boolean {
+        return this.currentDevice?.protocol === 'fcast';
+    }
+
+    private isExternalDisplayDevice(): boolean {
+        return this.currentDevice?.protocol === 'external-display';
+    }
+
+    setExternalDisplayController(controller: ExternalDisplayController | null): void {
+        this.externalDisplayController = controller;
+    }
+
+    updateExternalDisplayState(state: PlaybackState): void {
+        this.externalDisplayState = state;
+        this.emit('stateChanged', state);
+        this.emit('progressChanged', state.position);
+    }
+
+    addExternalDisplay(screenId: string, name: string): void {
+        const deviceId = `display-${screenId}`;
+        if (this.devices.has(deviceId)) return;
+        const device: Device = {
+            id: deviceId,
+            name,
+            location: '',
+            ip: '',
+            port: 0,
+            services: {},
+            protocol: 'external-display',
+        };
+        this.devices.set(deviceId, device);
+        LogService.info('ExternalDisplay', `Screen detected: ${name}`);
+        this.emit('deviceAdded', device);
+    }
+
+    removeExternalDisplay(screenId: string): void {
+        const deviceId = `display-${screenId}`;
+        this.devices.delete(deviceId);
+        if (this.currentDevice?.id === deviceId) {
+            this.currentDevice = null;
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('disconnected');
+            this.emit('mediaCleared');
+        }
+    }
+
+    /**
+     * Adds a manually configured FCast device.
+     * @param ip - The IP address of the FCast receiver.
+     * @param port - The port (default 46899).
+     * @param name - An optional name for the device.
+     */
+    addFCastDevice(ip: string, port: number = 46899, name?: string): void {
+        const device: Device = {
+            id: `fcast-${ip}:${port}`,
+            name: name || `FCast (${ip})`,
+            location: `tcp://${ip}:${port}`,
+            ip,
+            port,
+            services: {},
+            protocol: 'fcast',
+        };
+        this.devices.set(device.id, device);
+        LogService.info('FCast', `Manual device added: ${device.name} at ${ip}:${port}`);
+        this.emit('deviceAdded', device);
+    }
+
+    /**
+     * Starts mDNS discovery for FCast receivers (_fcast._tcp).
+     */
+    private startFCastDiscovery(): void {
+        try {
+            this.zeroconf = new Zeroconf();
+
+            this.zeroconf.on('resolved', (service: any) => {
+                const ip = service.addresses?.find((addr: string) => addr.includes('.'));
+                if (!ip) return;
+
+                const port = service.port || FCAST_PORT;
+                const name = service.name || `FCast (${ip})`;
+                const deviceId = `fcast-${ip}:${port}`;
+
+                if (!this.devices.has(deviceId)) {
+                    const device: Device = {
+                        id: deviceId,
+                        name,
+                        location: `tcp://${ip}:${port}`,
+                        ip,
+                        port,
+                        services: {},
+                        protocol: 'fcast',
+                    };
+                    this.devices.set(deviceId, device);
+                    LogService.info('FCast', `Discovered via mDNS: ${name} at ${ip}:${port}`);
+                    this.emit('deviceAdded', device);
+                }
+            });
+
+            this.zeroconf.on('error', (err: any) => {
+                LogService.warn('FCast', `mDNS discovery error: ${err}`);
+            });
+
+            this.zeroconf.scan('fcast', 'tcp');
+            LogService.info('FCast', 'mDNS discovery started (_fcast._tcp)');
+        } catch (err) {
+            LogService.warn('FCast', `Failed to start mDNS discovery: ${err}`);
+        }
+    }
+
+    private stopFCastDiscovery(): void {
+        if (this.zeroconf) {
+            try {
+                this.zeroconf.stop();
+                this.zeroconf.removeAllListeners();
+            } catch (err) {
+                LogService.warn('FCast', `Error stopping mDNS discovery: ${err}`);
+            }
+            this.zeroconf = null;
+        }
+    }
+
+    private attemptFCastReconnect(device: Device): void {
+        this.fcastReconnectAttempts++;
+
+        if (this.fcastReconnectAttempts > CastManager.FCAST_MAX_RECONNECT) {
+            LogService.warn('FCast', `Reconnect failed after ${CastManager.FCAST_MAX_RECONNECT} attempts, giving up`);
+            this.currentDevice = null;
+            this.fcastReconnectAttempts = 0;
+            this.cancelFCastReconnect();
+            this.emit('disconnected');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        LogService.info('FCast', `Reconnect attempt ${this.fcastReconnectAttempts}/${CastManager.FCAST_MAX_RECONNECT} in ${CastManager.FCAST_RECONNECT_DELAY / 1000}s...`);
+
+        this.fcastReconnectTimer = setTimeout(async () => {
+            try {
+                this.fcastClient = new FCastClient(device.ip, device.port);
+
+                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
+                    this.emit('stateChanged', state);
+                    this.emit('progressChanged', state.position);
+                });
+
+                this.fcastClient.on('volumeUpdate', (_volume: number) => {});
+
+                this.fcastClient.on('error', (message: string) => {
+                    this.emit('error', message);
+                });
+
+                this.fcastClient.on('disconnected', () => {
+                    this.fcastClient = null;
+                    if (this.intentionalDisconnect) return;
+                    this.attemptFCastReconnect(device);
+                });
+
+                await this.fcastClient.connect();
+                this.fcastReconnectAttempts = 0;
+                LogService.info('FCast', 'Reconnected successfully');
+            } catch (err) {
+                LogService.warn('FCast', `Reconnect attempt ${this.fcastReconnectAttempts} failed: ${err}`);
+                this.fcastClient = null;
+                this.attemptFCastReconnect(device);
+            }
+        }, CastManager.FCAST_RECONNECT_DELAY);
+    }
+
+    private cancelFCastReconnect(): void {
+        if (this.fcastReconnectTimer) {
+            clearTimeout(this.fcastReconnectTimer);
+            this.fcastReconnectTimer = null;
+        }
+        this.fcastReconnectAttempts = 0;
+    }
+
+    /**
      * Checks if a search is in progress.
      * @returns True if searching, false otherwise.
      */
@@ -100,26 +295,73 @@ export class CastManager extends EventEmitter {
 
     /**
      * Starts searching for casting devices.
+     * Sends multiple M-SEARCH messages for reliability (UDP is lossy).
      * @param duration - Duration of the search in milliseconds.
      */
     async startSearch(duration: number = CastConfig.DEFAULT_SEARCH_DURATION): Promise<void> {
-        if (this.searching) return;
+        if (this.searching) {
+            await this.stopSearch();
+        }
 
-        const state = await NetInfo.fetch();
-        if (!state.isConnected) {
+        const netState = await NetInfo.fetch();
+        if (!netState.isConnected) {
             this.emit('error', this.i18n.t('error.noNetwork'));
             return;
         }
 
         this.emit('searchStarted');
         this.searching = true;
-        this.devices.clear(); // Clear previous discoveries
+        // Preserve external display devices during search
+        const externalDisplays = Array.from(this.devices.entries())
+            .filter(([_, d]) => d.protocol === 'external-display');
+        this.devices.clear();
+        for (const [id, device] of externalDisplays) {
+            this.devices.set(id, device);
+        }
+        // Re-emit after searchStarted has been processed by reducer
+        if (externalDisplays.length > 0) {
+            setTimeout(() => {
+                for (const [_, device] of externalDisplays) {
+                    this.emit('deviceAdded', device);
+                }
+            }, 0);
+        }
+        this.pendingLocations.clear();
+
+        // Resolve WiFi IP for multicast interface binding
+        let localIp: string | undefined;
+        try {
+            if (netState.type === 'wifi' && netState.details) {
+                localIp = (netState.details as any).ipAddress ?? undefined;
+            }
+        } catch (err) {
+            LogService.warn('Multicast', `Could not resolve WiFi IP: ${err}`);
+        }
 
         // Start SSDP
         this.socket = Udp.createSocket({type: 'udp4'});
         this.socket.bind(0, () => {
-            this.socket.addMembership(MULTICAST_ADDRESS);
-            this.sendSearchMessage();
+            try {
+                this.socket.addMembership(MULTICAST_ADDRESS, localIp);
+            } catch (err) {
+                LogService.warn('Multicast', `addMembership with interface failed, retrying without: ${err}`);
+                try {
+                    this.socket.addMembership(MULTICAST_ADDRESS, null);
+                } catch (err2) {
+                    LogService.warn('Multicast', `Multicast group join failed: ${err2}`);
+                }
+            }
+            // Send multiple M-SEARCH with varied search targets for reliability
+            // Some devices only respond to specific ST values
+            LogService.info('SSDP', 'Search started, sending M-SEARCH requests');
+            this.sendSearchMessage(SEARCH_TARGET_ALL);
+            this.searchRetryTimers = [];
+            this.searchRetryTimers.push(setTimeout(() => {
+                if (this.searching) this.sendSearchMessage(DLNA_RENDERER_ST);
+            }, 2000));
+            this.searchRetryTimers.push(setTimeout(() => {
+                if (this.searching) this.sendSearchMessage(SEARCH_TARGET_ALL);
+            }, 5000));
         });
 
         this.socket.on('message', (msg: Buffer, rinfo: any) => {
@@ -129,6 +371,9 @@ export class CastManager extends EventEmitter {
         this.socket.on('error', (err: Error) => {
             this.emit('error', this.i18n.t('error.socket', {message: err.message}));
         });
+
+        // Start FCast mDNS discovery
+        this.startFCastDiscovery();
 
         // Stop after duration
         this.timeout = setTimeout(() => this.stopSearch(), duration);
@@ -147,18 +392,32 @@ export class CastManager extends EventEmitter {
             this.timeout = null;
         }
 
+        // Clear M-SEARCH retry timers
+        this.searchRetryTimers.forEach(t => clearTimeout(t));
+        this.searchRetryTimers = [];
+
         if (this.socket) {
             try {
                 this.socket.dropMembership(MULTICAST_ADDRESS);
             } catch (err) {
-                console.warn('Error dropping membership:', err);
+                LogService.warn('Multicast', `Failed to leave multicast group: ${err}`);
             }
-            this.socket.close();
+            const socketToClose = this.socket;
             this.socket = null;
+            await new Promise<void>((resolve) => {
+                socketToClose.once?.('close', resolve);
+                socketToClose.close();
+                // Fallback timeout in case 'close' event doesn't fire
+                setTimeout(resolve, 500);
+            });
         }
+
+        // Stop FCast mDNS discovery
+        this.stopFCastDiscovery();
 
         // Clean up listeners
         this.cleanupListeners();
+        LogService.info('SSDP', `Search stopped, ${this.devices.size} device(s) found`);
         this.emit('searchStopped');
     }
 
@@ -168,15 +427,51 @@ export class CastManager extends EventEmitter {
      */
     async connect(device: Device): Promise<void> {
         try {
-            // Verify device is still reachable
-            const isReachable = await this.checkDeviceReachability(device);
-            if (!isReachable) {
-                this.emit('error', this.i18n.t('error.deviceUnreachable'));
-                return;
+            if (device.protocol === 'external-display') {
+                this.currentDevice = device;
+                LogService.info('ExternalDisplay', `Connected to ${device.name}`);
+                this.emit('connected', device);
+            } else if (device.protocol === 'fcast') {
+                // FCast connection via TCP
+                this.fcastClient = new FCastClient(device.ip, device.port);
+
+                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
+                    this.emit('stateChanged', state);
+                    this.emit('progressChanged', state.position);
+                });
+
+                this.fcastClient.on('volumeUpdate', (volume: number) => {
+                    // Volume update handled via playbackUpdate
+                });
+
+                this.fcastClient.on('error', (message: string) => {
+                    this.emit('error', message);
+                });
+
+                this.fcastClient.on('disconnected', () => {
+                    this.fcastClient = null;
+                    if (this.intentionalDisconnect) {
+                        return; // Manual disconnect — don't reconnect
+                    }
+                    this.attemptFCastReconnect(device);
+                });
+
+                await this.fcastClient.connect();
+                this.currentDevice = device;
+                this.fcastReconnectAttempts = 0;
+                this.intentionalDisconnect = false;
+                this.emit('connected', device);
+            } else {
+                // DLNA connection
+                const isReachable = await this.checkDeviceReachability(device);
+                if (!isReachable) {
+                    this.emit('error', this.i18n.t('error.deviceUnreachable'));
+                    return;
+                }
+                this.currentDevice = device;
+                this.startPolling();
+                this.emit('connected', device);
             }
-            this.currentDevice = device;
-            this.startPolling();
-            this.emit('connected', device);
         } catch (err) {
             this.emit('error', this.i18n.t('error.connect', {message: (err as Error).message}));
         }
@@ -190,25 +485,44 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
-        // Stop heartbeat when stopping playback
+
+        if (this.isExternalDisplayDevice()) {
+            if (this.externalDisplayController) {
+                this.externalDisplayController.stop();
+            }
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            try {
+                await this.fcastClient.stop();
+            } catch (err) {
+                this.emit('error', this.i18n.t('error.stop', {message: (err as Error).message}));
+            }
+            this.currentMediaUri = null;
+            this.currentMediaInfo = null;
+            this.emit('castingStopped');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        // DLNA stop
         this.stopHeartbeat();
-        // Execute stop command in background with proper error handling
         this.dlnaStop().then(() => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
-
-            // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
             this.currentMediaUri = null;
             this.currentMediaInfo = null;
-            // Emit events to notify UI
             this.emit('castingStopped');
             this.emit('mediaCleared');
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.stop', {message: err.message}));
         });
     }
@@ -223,19 +537,36 @@ export class CastManager extends EventEmitter {
         }
 
         try {
-            // Stop heartbeat and polling immediately
-            this.stopHeartbeat();
-            // Stop polling immediately
-            this.stopPolling();
-            // First stop any current playback
-            await this.stop();
-            // Clear state immediately
-            this.currentDevice = null;
-            this.currentMediaUri = null;
-            this.currentMediaInfo = null;
-            // Emit disconnected event
-            this.emit('disconnected');
-            this.emit('mediaCleared');
+            if (this.isExternalDisplayDevice()) {
+                if (this.externalDisplayController) {
+                    this.externalDisplayController.stop();
+                }
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            } else if (this.isFCastDevice() && this.fcastClient) {
+                this.intentionalDisconnect = true;
+                this.cancelFCastReconnect();
+                await this.fcastClient.stop();
+                this.fcastClient.disconnect();
+                this.fcastClient = null;
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            } else {
+                this.stopHeartbeat();
+                this.stopPolling();
+                await this.stop();
+                this.currentDevice = null;
+                this.currentMediaUri = null;
+                this.currentMediaInfo = null;
+                this.emit('disconnected');
+                this.emit('mediaCleared');
+            }
         } catch (err) {
             this.emit('error', this.i18n.t('error.disconnect', {message: (err as Error).message}));
         }
@@ -263,29 +594,36 @@ export class CastManager extends EventEmitter {
 
         // Check if device supports this media type
         if (!CastUtils.deviceSupportsMediaType(this.currentDevice, mediaInfo.contentType || '')) {
-            console.warn(`Device may not support media type: ${mediaInfo.contentType}`);
+            LogService.warn('Cast', `Device may not support media type: ${mediaInfo.contentType}`);
         }
 
         this.currentMediaInfo = mediaInfo;
         this.currentMediaUri = mediaInfo.contentUrl;
 
         try {
-            // Clear cache before starting new media
-            this.soapCache.clear();
-
-            // Build basic DIDL metadata for images/videos
-            const didlMetadata = this.buildDIDLMetadata(mediaInfo);
-            await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
-            await this.dlnaPlay();
-            // Start heartbeat to maintain connection
-            this.startHeartbeat();
-            // Reset progress to 0 when starting new media
-            this.emit('progressChanged', 0);
-
-            // Then get actual status after a brief delay
-            this.forceStatusUpdate();
-
-            this.emit('castingStarted');
+            if (this.isExternalDisplayDevice()) {
+                LogService.info('ExternalDisplay', `Casting: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
+                this.emit('mediaCast', mediaInfo);
+                this.emit('progressChanged', 0);
+                this.emit('castingStarted');
+            } else if (this.isFCastDevice() && this.fcastClient) {
+                // FCast protocol
+                await this.fcastClient.play(mediaInfo);
+                this.emit('progressChanged', 0);
+                this.emit('castingStarted');
+            } else {
+                // DLNA protocol
+                this.soapCache.clear();
+                const didlMetadata = this.buildDIDLMetadata(mediaInfo);
+                LogService.info('Cast', `SetAVTransportURI: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
+                await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
+                LogService.info('Cast', 'Play command sent');
+                await this.dlnaPlay();
+                this.startHeartbeat();
+                this.emit('progressChanged', 0);
+                this.forceStatusUpdate();
+                this.emit('castingStarted');
+            }
         } catch (err) {
             this.emit('error', this.i18n.t('error.cast', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
@@ -321,6 +659,18 @@ export class CastManager extends EventEmitter {
             return;
         }
 
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.seek(position);
+            this.emit('progressChanged', position);
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            await this.fcastClient.seek(position);
+            this.emit('progressChanged', position);
+            return;
+        }
+
         // Check if this device is already known to not support seek
         if (this.currentDevice.capabilities?.includes('NoSeek')) {
             return;
@@ -329,19 +679,19 @@ export class CastManager extends EventEmitter {
         try {
             // Validate seek position
             if (position < 0) {
-                console.warn('Seek position cannot be negative, clamping to 0');
+                LogService.warn('Seek', 'Position clamped to 0 (negative value)');
                 position = 0;
             }
 
             // Get current status for validation
             const currentStatus = await this.dlnaGetStatus();
             if (currentStatus.duration <= 0) {
-                console.warn('Cannot seek: No media duration available');
+                LogService.warn('Seek', 'Cannot seek: no media duration available');
                 return;
             }
 
             if (position > currentStatus.duration) {
-                console.warn('Seek position beyond duration, clamping to duration');
+                LogService.warn('Seek', 'Position clamped to duration (exceeded media length)');
                 position = currentStatus.duration;
             }
 
@@ -387,7 +737,7 @@ export class CastManager extends EventEmitter {
                 // Silently ignore - don't show error to user
                 return;
             } else if (errorMessage.includes('711')) {
-                console.warn('Invalid seek target');
+                LogService.warn('Seek', 'Invalid seek target (error 711)');
                 this.emit('error', this.i18n.t('error.seekPosition'));
                 return;
             }
@@ -399,7 +749,7 @@ export class CastManager extends EventEmitter {
             } catch {
             }
 
-            console.warn('Seek failed with error:', errorMessage);
+            LogService.warn('Seek', `Seek failed: ${errorMessage}`);
             this.emit('error', this.i18n.t('error.seek', {message: CastUtils.formatErrorMessage(err as Error)}));
         }
     }
@@ -410,11 +760,18 @@ export class CastManager extends EventEmitter {
      */
     async getStatus(): Promise<PlaybackState> {
         if (!this.currentDevice) {
-            // Stop background tasks silently
             this.stopHeartbeat();
             this.stopPolling();
-            // Return default state without emitting error (polling will handle it)
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
+        }
+
+        if (this.isExternalDisplayDevice()) {
+            return this.externalDisplayState;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            // FCast pushes updates via events; return last known state
+            return this.fcastClient.getPlaybackState();
         }
 
         try {
@@ -448,8 +805,15 @@ export class CastManager extends EventEmitter {
      * Cleanup method to be called when the instance is no longer needed.
      */
     public cleanup(): void {
+        this.intentionalDisconnect = true;
+        this.cancelFCastReconnect();
         this.stopSearch();
         this.stopHeartbeat();
+        this.stopFCastDiscovery();
+        if (this.fcastClient) {
+            this.fcastClient.disconnect();
+            this.fcastClient = null;
+        }
         this.disconnect();
         this.soapCache.clear();
         this.devices.clear();
@@ -465,11 +829,21 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.mute(muted);
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            // FCast doesn't have a dedicated mute opcode; set volume to 0 or restore
+            await this.fcastClient.setVolume(muted ? 0 : 0.5);
+            return;
+        }
+
         this.dlnaSetMute(muted).then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.mute', {message: err.message}));
         });
     }
@@ -483,14 +857,22 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.setVolume(volume);
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            await this.fcastClient.setVolume(volume);
+            return;
+        }
+
         await this.dlnaSetVolume(Math.round(volume * 100)).then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.mute', {message: err.message}));
         });
-
     }
 
     /**
@@ -502,12 +884,21 @@ export class CastManager extends EventEmitter {
             return;
         }
 
-        // Execute pause command in background with proper error handling
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.pause();
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            this.fcastClient.pause().catch((err) => {
+                this.emit('error', this.i18n.t('error.pause', {message: (err as Error).message}));
+            });
+            return;
+        }
+
         this.dlnaPause().then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.pause', {message: err.message}));
         });
     }
@@ -520,12 +911,22 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.noDevice'));
             return;
         }
-        // Execute play command in background with proper error handling
+
+        if (this.isExternalDisplayDevice()) {
+            this.externalDisplayController?.play();
+            return;
+        }
+
+        if (this.isFCastDevice() && this.fcastClient) {
+            this.fcastClient.resume().catch((err) => {
+                this.emit('error', this.i18n.t('error.play', {message: (err as Error).message}));
+            });
+            return;
+        }
+
         this.dlnaPlay().then(() => {
-            // Trigger a status update to sync the UI
             setTimeout(() => this.forceStatusUpdate(), 500);
         }).catch((err) => {
-            // Emit error but don't block the UI
             this.emit('error', this.i18n.t('error.pause', {message: err.message}));
         });
     }
@@ -544,7 +945,7 @@ export class CastManager extends EventEmitter {
                     // Lightweight ping to maintain connection
                     await this.dlnaGetStatus();
                 } catch (error) {
-                    console.warn('Heartbeat failed:', error);
+                    LogService.warn('Heartbeat', `Heartbeat failed: ${error}`);
                 }
             }
         }, 30000); // Every 30 seconds during playback
@@ -651,7 +1052,7 @@ export class CastManager extends EventEmitter {
                         if (!completed) {
                             completed = true;
                             if (timeoutId) clearTimeout(timeoutId);
-                            console.error(`SOAP fetch error for ${action}:`, (err as Error).message);
+                            LogService.error('SOAP', `Fetch error for ${action}: ${(err as Error).message}`);
                             reject(err);
                         }
                     }
@@ -668,7 +1069,7 @@ export class CastManager extends EventEmitter {
 
             } catch (err) {
                 lastError = err as Error;
-                console.error(`SOAP attempt ${attempt + 1} failed for ${action}:`, lastError.message);
+                LogService.error('SOAP', `Attempt ${attempt + 1} failed for ${action}: ${lastError.message}`);
 
                 // For play/pause, don't retry - fail fast
                 if (action === 'Play' || action === 'Pause') {
@@ -683,20 +1084,24 @@ export class CastManager extends EventEmitter {
             }
         }
 
-        console.error(`SOAP action ${action} FINAL FAILURE:`, lastError?.message);
+        LogService.error('SOAP', `Action ${action} failed after all retries: ${lastError?.message}`);
         throw lastError || new Error(`SOAP action ${action} failed`);
     }
 
     /**
      * Send a SSDP M-SEARCH message
      */
-    private sendSearchMessage(): void {
+    /**
+     * Send an SSDP M-SEARCH message with the given search target.
+     * @param searchTarget - UPnP search target (ST header value)
+     */
+    private sendSearchMessage(searchTarget: string = SEARCH_TARGET_ALL): void {
         const message = Buffer.from(
             `M-SEARCH * HTTP/1.1\r\n` +
             `HOST: ${MULTICAST_ADDRESS}:${SSDP_PORT}\r\n` +
             `MAN: "ssdp:discover"\r\n` +
             `MX: 3\r\n` +
-            `ST: ${SEARCH_TARGET_ALL}\r\n\r\n`
+            `ST: ${searchTarget}\r\n\r\n`
         );
 
         this.socket.send(message, 0, message.length, SSDP_PORT, MULTICAST_ADDRESS, (err: Error | null) => {
@@ -711,36 +1116,50 @@ export class CastManager extends EventEmitter {
      * @private
      */
     private async handleSsdpResponse(response: string, rinfo: any): Promise<void> {
+        let deviceLocation: string | undefined;
         try {
             const headers = this.parseHeaders(response);
             const st = headers['ST'];
-            const location = headers['LOCATION'];
+            deviceLocation = headers['LOCATION'];
             const usn = headers['USN']?.trim();
 
             // Validate headers and check for duplicates early
-            if (!st || !location || !usn) {
-                console.warn('Invalid SSDP response: missing ST, LOCATION, or USN');
+            if (!st || !deviceLocation || !usn) {
+                LogService.warn('SSDP', 'Invalid response: missing ST, LOCATION, or USN headers');
                 return;
             }
 
-            if (this.devices.has(usn)) return; // Skip if device already exists
+            if (this.devices.has(usn)) return;
 
-            // Only process DLNA devices
-            if (st !== DLNA_RENDERER_ST) {
+            // Skip if this location is already being processed or was already added
+            if (this.pendingLocations.has(deviceLocation)) return;
+            this.pendingLocations.add(deviceLocation);
+
+            // Accept MediaRenderer or any UPnP device (AVTransport is verified below)
+            const isRenderer = st === DLNA_RENDERER_ST;
+            const isUpnpDevice = st.includes('upnp') || st.includes('schemas-upnp-org') || st === SEARCH_TARGET_ALL;
+            if (!isRenderer && !isUpnpDevice) {
                 return;
             }
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), CastConfig.DESCRIPTION_TIMEOUT);
 
-            const descRes = await fetch(location, {
-                signal: controller.signal
-            });
+            let descRes;
+            try {
+                descRes = await fetch(deviceLocation, {
+                    signal: controller.signal
+                });
+            } catch (fetchErr) {
+                this.pendingLocations.delete(deviceLocation);
+                throw fetchErr;
+            }
 
             clearTimeout(timeoutId);
 
             if (!descRes.ok) {
-                console.warn(`Failed to fetch device description: ${descRes.status}`);
+                LogService.warn('SSDP', `Device description fetch failed with HTTP ${descRes.status}`);
+                this.pendingLocations.delete(deviceLocation);
                 return;
             }
 
@@ -748,7 +1167,17 @@ export class CastManager extends EventEmitter {
             const parsed = this.xmlParser.parse(descXml);
 
             if (!parsed?.root?.device) {
-                console.warn('Invalid device description XML');
+                LogService.warn('SSDP', 'Invalid device description XML: missing root device element');
+                this.pendingLocations.delete(deviceLocation);
+                return;
+            }
+
+            const services = this.extractServices(parsed);
+
+            // Must have AVTransport to be a usable renderer
+            const hasAVTransport = Object.keys(services).some(s => s.includes('AVTransport'));
+            if (!hasAVTransport) {
+                this.pendingLocations.delete(deviceLocation);
                 return;
             }
 
@@ -758,20 +1187,23 @@ export class CastManager extends EventEmitter {
             const device: Device = {
                 id: usn,
                 name: friendlyName,
-                location,
+                location: deviceLocation,
                 ip: rinfo.address,
                 port: rinfo.port,
-                services: this.extractServices(parsed),
+                services,
                 manufacturer: deviceInfo.manufacturer,
                 modelName: deviceInfo.modelName,
                 capabilities: this.extractCapabilities(deviceInfo),
-                iconUrl: await this.extractDeviceIcon(parsed, location),
+                iconUrl: await this.extractDeviceIcon(parsed, deviceLocation),
+                protocol: 'dlna',
             };
 
             this.devices.set(usn, device);
+            LogService.info('SSDP', `Device found: ${device.name} (${device.modelName || 'unknown model'}) at ${device.ip}`);
             this.emit('deviceAdded', device);
         } catch (err) {
-            console.warn('Error handling SSDP response:', (err as Error).message);
+            if (deviceLocation) this.pendingLocations.delete(deviceLocation);
+            LogService.warn('SSDP', `Error processing device response: ${(err as Error).message}`);
         }
     }
 
@@ -821,7 +1253,7 @@ export class CastManager extends EventEmitter {
                 }
             });
         } catch (err) {
-            console.warn('Error extracting services:', err);
+            LogService.warn('SSDP', `Error extracting device services: ${err}`);
         }
 
         return services;
@@ -844,7 +1276,7 @@ export class CastManager extends EventEmitter {
             // Add more capability detection logic as needed
 
         } catch (err) {
-            console.warn('Error extracting capabilities:', err);
+            LogService.warn('SSDP', `Error extracting device capabilities: ${err}`);
         }
 
         return capabilities;
@@ -992,7 +1424,7 @@ ${body}
             } catch (muteError) {
                 // GetMute failed completely, device doesn't support it
                 deviceSupportsMute = false;
-                console.warn('Device does not support GetMute, using volume-based mute detection');
+                LogService.info('Status', 'Device does not support GetMute, using volume-based detection');
             }
 
             // If device doesn't support native mute, use volume-based logic
@@ -1003,7 +1435,7 @@ ${body}
 
             return {position, duration, isPlaying, volume, muted};
         } catch (err) {
-            console.warn('Error getting DLNA status:', err);
+            LogService.warn('Status', `Failed to get DLNA playback status: ${err}`);
             return {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
         }
     }
@@ -1071,7 +1503,7 @@ ${body}
                 this.emit('progressChanged', status.position);
 
             } catch (err) {
-                console.warn('Polling error:', err);
+                LogService.warn('Polling', `Playback status polling error: ${err}`);
             }
             this.pollingInterval = setTimeout(poll, CastConfig.DEFAULT_POLL_INTERVAL);
         };
@@ -1173,8 +1605,7 @@ ${body}
             protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=${mimeType.includes('jpeg') ? 'JPEG_SM' : 'PNG_LRG'};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=00D00000000000000000000000000000`;
         } else if (mimeType.includes('video')) {
             upnpClass = 'object.item.videoItem';
-            // Use specific DLNA profile for MP4 (H.264/AAC is common)
-            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MPEG4_P2_MP4_ASP_AAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_OP=01;DLNA.ORG_CI=0`;
 
             // Add duration if available
             if (mediaInfo.streamDuration) {
@@ -1189,7 +1620,7 @@ ${body}
             }
         } else if (mimeType.includes('audio')) {
             upnpClass = 'object.item.audioItem.musicTrack';
-            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000`;
+            protocolInfo = `http-get:*:${mimeType}:DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000`;
         }
 
         // Use metadata.title if available, fallback to filename from contentUrl
@@ -1269,7 +1700,7 @@ ${body}
 
             return undefined;
         } catch (err) {
-            console.warn('Error extracting device icon:', err);
+            LogService.warn('SSDP', `Error extracting device icon: ${err}`);
             return undefined;
         }
     }

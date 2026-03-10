@@ -1,39 +1,17 @@
-CastLab is a comprehensive media casting application that enables you to stream your local media and online videos to DLNA/UPnP compatible devices.
+Cast your photos, videos, and audio to DLNA/UPnP and FCast devices on your local network.
 
-Key Features:
+Features:
 
-- Media Casting
-  - Cast photos, videos, and audio from your device gallery
-  - Support for DLNA/UPnP protocol with automatic device discovery
-  - Built-in HTTP server for seamless media streaming
-
-- Media Management
-  - Browse media by albums with filtering options (date range, media type)
-  - Create and manage custom playlists
-  - Organize media with intuitive selection and editing tools
-
-- Playback Control
-  - Integrated player controller with play, pause, stop, seek, and volume controls
-  - Autoplay support with automatic advancement to next media
-  - Compact mode for unobtrusive playback monitoring
-  - Background playback with notification controls
-  - Keep device awake during casting sessions
-
-- Video Extraction
-  - Extract videos from web pages (HTML parsing)
-  - Remote casting from PeerTube and YouTube
-  - YouTube URLs automatically converted to Invidious instances (privacy-friendly, no direct YouTube involvement)
-  - Configurable Invidious instance settings
-  - Extraction history tracking
-
-- Customization
-  - Multiple theme modes: Light, Dark, Auto (Day/Night), and Custom
-  - Advanced theme customizer with preset themes
-  - Customize individual color elements (primary, secondary, background, surface, etc.)
-  - Material Design 3 (Material You) support
-
-- User Experience
-  - Intuitive navigation with contextual menus
-  - Toast notifications for operation feedback
-  - Persistent theme and playlist settings
-  - SQLite database for reliable data storage
+- Cast media from your gallery, file picker, or online sources to any DLNA/UPnP or FCast receiver
+- Automatic device discovery (SSDP and mDNS)
+- Screen sharing to cast your Android screen in real time
+- Browse media by albums with date range and media type filters
+- Create and manage playlists
+- Player controls: play, pause, stop, seek, volume, autoplay
+- Background playback with notification controls (play/pause/stop)
+- Extract and cast videos from web pages (HTML parsing)
+- Cast from PeerTube and YouTube via Invidious instances (no direct YouTube connection)
+- Import M3U/M3U8 playlists (IPTV, online streams)
+- Open files directly from the file picker
+- Light, Dark, Auto, and Custom themes with 8 presets
+- Material Design 3

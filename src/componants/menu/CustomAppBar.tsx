@@ -12,10 +12,13 @@ import {useCastManager} from "../../contexts/castManager-context";
 interface CustomAppBarProps {
     castManager: CastManager;
     onButtonCastPressed?: () => Promise<void>;
+    onScreenSharePressed?: () => void;
+    isScreenSharing?: boolean;
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
     onThemeCustomizerPressed?: () => void;
+    onOpenFilePressed?: () => void;
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
@@ -25,9 +28,12 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 options,
                                                                                 themePressed,
                                                                                 onButtonCastPressed,
+                                                                                onScreenSharePressed,
+                                                                                isScreenSharing,
                                                                                 onPlaylistsPressed,
                                                                                 onVideoExtractorPressed,
-                                                                                onThemeCustomizerPressed
+                                                                                onThemeCustomizerPressed,
+                                                                                onOpenFilePressed
                                                                             }) => {
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
@@ -38,13 +44,14 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     let title = getHeaderTitle(options, route.name);
 
     // Custom title logic for specific routes
-    if (route.name === "Album" && route?.params?.album) {
-        title = route.params.album.title;
-    } else if (route.name === "PlaylistEdit" && route?.params?.playlist?.name) {
-        title = `${i18n.t('edit')} "${route.params.playlist.name}"`;
+    const params = route.params as Record<string, any> | undefined;
+    if (route.name === "Album" && params?.album) {
+        title = params.album.title;
+    } else if (route.name === "PlaylistEdit" && params?.playlistName) {
+        title = `${i18n.t('edit')} "${params.playlistName}"`;
     } else if (route.name === "MediaSelector") {
-        if (route?.params?.playlistName) {
-            title = i18n.t('add_media_to_named_playlist', {playlistName: route.params.playlistName});
+        if (params?.playlistName) {
+            title = i18n.t('add_media_to_named_playlist', {playlistName: params.playlistName});
         } else {
             title = i18n.t('select_media_title');
         }
@@ -118,6 +125,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         }
     }
 
+    const openFile = () => {
+        setMenuVisible(false);
+        if (onOpenFilePressed) {
+            onOpenFilePressed();
+        }
+    }
+
     const openAbout = () => {
         setMenuVisible(false);
         navigation.navigate('About');
@@ -141,6 +155,16 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
             }}/>}
             <Appbar.Content title={title}/>
 
+            {/* Screen share button — visible on Android, grayed out when not connected */}
+            {!hideCastAndMenu && Platform.OS === 'android' && (
+                <Appbar.Action
+                    icon={isScreenSharing ? 'monitor-share' : 'monitor'}
+                    onPress={onScreenSharePressed}
+                    disabled={!isConnected}
+                    color={isScreenSharing ? theme.colors.primary : undefined}
+                />
+            )}
+
             {/* Only show cast button if not in hidden screens */}
             {!hideCastAndMenu && castIcon && (
                 <Appbar.Action icon={castIcon} onPress={onButtonCastPressed}/>
@@ -163,6 +187,10 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                    leadingIcon={"palette"}
                                    accessibilityLabel={i18n.t('customize_theme')}/>
                     )}
+
+                    {/* Open file picker */}
+                    <Menu.Item onPress={openFile} title={i18n.t('open_file')} leadingIcon={"file-document-outline"}
+                               accessibilityLabel={i18n.t('open_file')}/>
 
                     {/* Only show playlists menu item if not in playlists-related screens */}
                     {!hidePlaylistsMenuItem && (

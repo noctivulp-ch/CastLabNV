@@ -432,10 +432,11 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                                 </Chip>
                             )}
                             <Chip mode="outlined" compact
-                                  icon={item.source === 'video-tag' ? 'xml' : item.source === 'direct-link' ? 'link' : 'database'}
+                                  icon={item.source === 'video-tag' ? 'xml' : item.source === 'direct-link' ? 'link' : item.source === 'm3u-playlist' ? 'playlist-music' : 'database'}
                                   style={styles.sourceChip} textStyle={styles.chipText}>
                                 {item.source === 'video-tag' ? i18n.t('video_tag') :
-                                    item.source === 'direct-link' ? i18n.t('direct_link') : i18n.t('data_attribute')}
+                                    item.source === 'direct-link' ? i18n.t('direct_link') :
+                                    item.source === 'm3u-playlist' ? i18n.t('m3u_playlist') : i18n.t('data_attribute')}
                             </Chip>
                         </View>
 
@@ -640,6 +641,12 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                         {url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be') ? (
                             <Chip icon="information" style={styles.infoChip} textStyle={styles.infoChipText}>
                                 {i18n.t('youtube_conversion_info')}
+                            </Chip>
+                        ) : null}
+
+                        {url.toLowerCase().endsWith('.m3u') || url.toLowerCase().endsWith('.m3u8') ? (
+                            <Chip icon="playlist-music" style={styles.infoChip} textStyle={styles.infoChipText}>
+                                {i18n.t('m3u_playlist_detected')}
                             </Chip>
                         ) : null}
 

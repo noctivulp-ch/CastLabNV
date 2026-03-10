@@ -10,7 +10,7 @@ export interface ExtractedVideo {
     title: string;
     thumbnail?: string;
     format?: string;
-    source: 'video-tag' | 'direct-link' | 'data-attribute';
+    source: 'video-tag' | 'direct-link' | 'data-attribute' | 'm3u-playlist';
 }
 
 export interface ExtractionResult {
@@ -35,6 +35,9 @@ export class VideoExtractorService {
         'data-file',
         'data-video',
     ];
+
+    // M3U/M3U8 playlist file extensions
+    private static readonly M3U_EXTENSIONS = ['m3u', 'm3u8'];
 
     // Default Invidious instance
     private static DEFAULT_INVIDIOUS_INSTANCE = 'https://yewtu.be';
@@ -123,6 +126,11 @@ export class VideoExtractorService {
                 }
             }
 
+            // Check if URL points to an M3U/M3U8 playlist
+            if (this.isM3uUrl(normalizedUrl)) {
+                return await this.extractFromM3u(normalizedUrl);
+            }
+
             // Try platform-specific extractors for non-YouTube URLs
             const platform = this.detectPlatform(normalizedUrl);
             if (platform !== 'unknown') {
@@ -133,8 +141,13 @@ export class VideoExtractorService {
                 // If platform extraction fails, fall back to HTML parsing
             }
 
-            // Fallback: Fetch HTML content and parse
+            // Fallback: Fetch content and parse
             const html = await this.fetchHtml(normalizedUrl);
+
+            // Check if content is actually an M3U playlist served without .m3u extension
+            if (this.isM3uContent(html)) {
+                return this.parseM3uPlaylist(html, normalizedUrl);
+            }
 
             // Parse HTML and extract videos
             const videos = this.parseHtml(html, normalizedUrl);
@@ -844,6 +857,138 @@ export class VideoExtractorService {
         }
 
         return videos;
+    }
+
+    /**
+     * Check if URL points to an M3U/M3U8 playlist file
+     * @param url - URL to check
+     * @returns True if URL has an M3U or M3U8 extension
+     */
+    private static isM3uUrl(url: string): boolean {
+        try {
+            const pathname = new URL(url).pathname.toLowerCase();
+            return this.M3U_EXTENSIONS.some(ext => pathname.endsWith(`.${ext}`));
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Check if text content is an M3U playlist by examining its header
+     * @param content - Text content to check
+     * @returns True if content starts with #EXTM3U
+     */
+    private static isM3uContent(content: string): boolean {
+        return content.trimStart().startsWith('#EXTM3U');
+    }
+
+    /**
+     * Parse M3U/M3U8 playlist content and extract stream entries.
+     * Supports #EXTINF metadata with tvg-logo, tvg-name, group-title attributes.
+     * @param content - Raw M3U playlist text content
+     * @param sourceUrl - Original playlist URL for resolving relative URLs
+     * @returns ExtractionResult with extracted streams
+     */
+    private static parseM3uPlaylist(content: string, sourceUrl: string): ExtractionResult {
+        try {
+            const lines = content.split(/\r?\n/);
+            const videos: ExtractedVideo[] = [];
+
+            let currentTitle: string | undefined;
+            let currentLogo: string | undefined;
+            let currentGroup: string | undefined;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+
+                if (!line || line === '#EXTM3U') {
+                    continue;
+                }
+
+                if (line.startsWith('#EXTINF:')) {
+                    const extinf = line.substring(8);
+
+                    const logoMatch = extinf.match(/tvg-logo="([^"]*)"/i);
+                    currentLogo = logoMatch ? logoMatch[1] : undefined;
+
+                    const groupMatch = extinf.match(/group-title="([^"]*)"/i);
+                    currentGroup = groupMatch ? groupMatch[1] : undefined;
+
+                    const nameMatch = extinf.match(/tvg-name="([^"]*)"/i);
+                    if (nameMatch && nameMatch[1]) {
+                        currentTitle = nameMatch[1];
+                    } else {
+                        const commaIndex = extinf.lastIndexOf(',');
+                        currentTitle = commaIndex >= 0 ? extinf.substring(commaIndex + 1).trim() : undefined;
+                    }
+
+                    continue;
+                }
+
+                // Skip other directives
+                if (line.startsWith('#')) {
+                    continue;
+                }
+
+                // Stream URL line
+                const streamUrl = this.resolveUrl(line, sourceUrl);
+                if (streamUrl) {
+                    videos.push({
+                        id: this.generateId(streamUrl),
+                        url: streamUrl,
+                        title: currentTitle || this.extractFilename(streamUrl),
+                        thumbnail: currentLogo || undefined,
+                        format: currentGroup || 'STREAM',
+                        source: 'm3u-playlist',
+                    });
+                }
+
+                currentTitle = undefined;
+                currentLogo = undefined;
+                currentGroup = undefined;
+            }
+
+            return {
+                success: true,
+                videos,
+                pageTitle: `M3U Playlist (${videos.length} streams)`,
+            };
+        } catch (error) {
+            console.error('M3U parsing error:', error);
+            return {
+                success: false,
+                videos: [],
+                error: `M3U parsing failed: ${(error as Error).message}`,
+            };
+        }
+    }
+
+    /**
+     * Extract streams from an M3U/M3U8 playlist URL
+     * @param url - M3U playlist URL
+     * @returns ExtractionResult with stream entries
+     */
+    private static async extractFromM3u(url: string): Promise<ExtractionResult> {
+        try {
+            const content = await this.fetchHtml(url);
+
+            if (!this.isM3uContent(content)) {
+                return {
+                    success: false,
+                    videos: [],
+                    error: 'URL does not contain a valid M3U playlist',
+                };
+            }
+
+            return this.parseM3uPlaylist(content, url);
+        } catch (error) {
+            console.error('M3U extraction error:', error);
+            return {
+                success: false,
+                videos: [],
+                error: `M3U extraction failed: ${(error as Error).message}`,
+            };
+        }
     }
 
     /**

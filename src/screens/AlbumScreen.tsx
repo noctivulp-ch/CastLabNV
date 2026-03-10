@@ -1,6 +1,6 @@
 import {initTranslate} from "../localization/translate";
 import {ActivityIndicator, Button, IconButton, Menu, ProgressBar, Text} from 'react-native-paper';
-import React, {forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useState} from "react";
+import React, {forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import {useDispatch} from "react-redux";
 import {FlatList, StyleSheet, View} from "react-native";
@@ -12,6 +12,15 @@ import AssetItem from "../componants/items/AssetItem";
 import {addToAssets, setAssets, setCurrentAsset} from "../store/slice/castSlice";
 import {DatePickerModal} from 'react-native-paper-dates';
 import {useScrollDirection} from "../hooks/useScrollDirection";
+
+import {CastUtils} from "../DLNACast/utils/CastUtils";
+
+/**
+ * Filters out non-castable media (files indexed by Android but not supported for DLNA/FCast casting)
+ */
+const filterFakeMedia = (assets: Asset[]): Asset[] => {
+    return assets.filter((asset) => CastUtils.isSupportedExtension(asset.filename));
+};
 
 export type AlbumProps = NativeStackScreenProps<RootStackParamList, "Album"> & {
     playerHeight: number;
@@ -39,6 +48,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
     // Extract navigation parameters
     const album = route.params?.album;
     const videoOnly = route.params?.videoOnly;
+    const initialMediaType = route.params?.initialMediaType;
 
     // Component state management
     const [albumReady, setAlbumReady] = useState(false);
@@ -47,14 +57,21 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
     const {theme} = useContext(ThemeContext);
 
     // Media filtering and sorting state
+    // All media types for unfiltered view
+    const allMediaTypes: MediaLibrary.MediaTypeValue[] = [
+        MediaLibrary.MediaType.photo,
+        MediaLibrary.MediaType.video,
+        MediaLibrary.MediaType.audio
+    ];
     const [type, setType] = useState<MediaLibrary.MediaTypeValue | MediaLibrary.MediaTypeValue[] | undefined>(
-        videoOnly ? "video" : undefined
+        initialMediaType ? initialMediaType as MediaLibrary.MediaTypeValue : (videoOnly ? "video" : allMediaTypes)
     );
     const [sortModificationTimeAsc, setSortModificationTimeAsc] = useState<SortByValue>([SortBy.modificationTime, false]);
     const [sortCreationTimeAsc, setSortCreationTimeAsc] = useState<SortByValue | undefined>(undefined);
     const [sortDuration, setSortDuration] = useState<SortByValue | undefined>(undefined);
     const [sortWidth, setSortWidth] = useState<SortByValue | undefined>(undefined);
     const [sortHeight, setSortHeight] = useState<SortByValue | undefined>(undefined);
+    const [sortFilename, setSortFilename] = useState<boolean | undefined>(undefined);
     const [sortBy, setSortBy] = useState<SortByValue[]>([sortModificationTimeAsc]);
 
     // Date filtering state
@@ -81,6 +98,15 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
         threshold: 10 // Standard threshold for asset screen
     });
 
+    // Client-side sort by filename (not supported by expo-media-library)
+    const sortedAssets = useMemo(() => {
+        if (sortFilename === undefined) return asset;
+        return [...asset].sort((a, b) => {
+            const comparison = (a.filename || '').localeCompare(b.filename || '', undefined, {numeric: true});
+            return sortFilename ? comparison : -comparison;
+        });
+    }, [asset, sortFilename]);
+
     /**
      * Load more media assets - used by autoplay when reaching end
      */
@@ -95,8 +121,9 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
             const assetsPhotoOptions = buildAssetsOptions(endCursor);
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
 
-            if (assetsPhoto.assets.length > 0) {
-                const newAssets = [...asset, ...assetsPhoto.assets];
+            const filteredNew = filterFakeMedia(assetsPhoto.assets);
+            if (filteredNew.length > 0) {
+                const newAssets = [...asset, ...filteredNew];
                 setAsset(newAssets);
 
                 // Update the Redux store with the complete asset list for autoplay
@@ -182,14 +209,15 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
 
             const assetsPhotoOptions = buildAssetsOptions();
             const assetsPhoto: PagedInfo<Asset> = await MediaLibrary.getAssetsAsync(assetsPhotoOptions);
+            const filtered = filterFakeMedia(assetsPhoto.assets);
 
-            setAsset(assetsPhoto.assets);
+            setAsset(filtered);
             setEndCursor(assetsPhoto.endCursor);
             setHasMore(assetsPhoto.hasNextPage);
             setAlbumReady(true);
 
             // Update Redux store with initial assets for autoplay
-            dispatch(setAssets(assetsPhoto.assets));
+            dispatch(setAssets(filtered));
 
             resetScroll();
         })();
@@ -298,6 +326,17 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
         }
     }
 
+    /**
+     * Get trailing icon for filename sorting menu item
+     */
+    const getTrailingIconFilename = () => {
+        if (sortFilename === undefined) {
+            return "";
+        } else {
+            return sortFilename ? "arrow-up-thick" : "arrow-down-thick"
+        }
+    }
+
     // Show loading indicator while fetching initial data
     if (!albumReady) {
         return (
@@ -340,7 +379,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
                         setTypeMenuVisible(false);
                         setTypeIcon("select-all");
                         setTypeText(i18n.t('all_media'));
-                        setType(videoOnly ? "video" : undefined);
+                        setType(videoOnly ? "video" : allMediaTypes);
                     }} title={i18n.t('all_media')} leadingIcon="select-all"/>
 
                     <Menu.Item onPress={() => {
@@ -399,9 +438,14 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
                     }} title={i18n.t('height')} trailingIcon={getTrailingIconHeight()}/>
 
                     <Menu.Item onPress={() => {
+                        setSortFilename(sortFilename === undefined ? true : !sortFilename);
+                    }} title={i18n.t('filename')} trailingIcon={getTrailingIconFilename()}/>
+
+                    <Menu.Item onPress={() => {
                         setSortDuration(undefined);
                         setSortWidth(undefined);
                         setSortHeight(undefined);
+                        setSortFilename(undefined);
                         setSortModificationTimeAsc([SortBy.modificationTime, false]);
                         setSortByMenuVisible(false);
                     }} title={i18n.t('reset')}/>
@@ -440,7 +484,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
             {/* Assets count and loading indicator */}
             <View style={styles.statusBar}>
                 <Text variant="bodySmall" style={[styles.statusText, {color: theme.colors.onSurfaceVariant}]}>
-                    {asset.length} {asset.length === 1 ? i18n.t('item') : i18n.t('items')}
+                    {sortedAssets.length} {sortedAssets.length === 1 ? i18n.t('item') : i18n.t('items')}
                     {hasMore && ` (${i18n.t('more_available')})`}
                 </Text>
                 {loadMoreData && (
@@ -452,7 +496,7 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
 
             {/* Asset list with dynamic padding for PlayerController */}
             <FlatList
-                data={asset}
+                data={sortedAssets}
                 renderItem={({item}) => (
                     <AssetItem asset={item} onPressed={assetPressed.bind(this, item)}/>
                 )}

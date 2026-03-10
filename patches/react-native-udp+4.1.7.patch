@@ -1,0 +1,74 @@
+diff --git a/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSocketClient.java b/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSocketClient.java
+index a226705..7b916a4 100644
+--- a/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSocketClient.java
++++ b/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSocketClient.java
+@@ -9,6 +9,7 @@ import java.net.DatagramSocket;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+ import java.net.MulticastSocket;
++import java.net.NetworkInterface;
+ import java.net.SocketAddress;
+ import java.net.SocketException;
+ import java.net.UnknownHostException;
+@@ -91,10 +92,23 @@ public final class UdpSocketClient implements UdpReceiverTask.OnDataReceivedList
+      * @throws IllegalStateException if socket is not bound.
+      */
+     public void addMembership(String address) throws UnknownHostException, IOException, IllegalStateException {
++        addMembership(address, null);
++    }
++
++    public void addMembership(String address, @Nullable String interfaceAddress) throws UnknownHostException, IOException, IllegalStateException {
+         if (null == mSocket || !mSocket.isBound()) {
+             throw new IllegalStateException("Socket is not bound.");
+         }
+ 
++        if (interfaceAddress != null) {
++            NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getByName(interfaceAddress));
++            if (netIf != null) {
++                ((MulticastSocket) mSocket).joinGroup(new InetSocketAddress(InetAddress.getByName(address), 0), netIf);
++                mIsMulticastSocket = true;
++                return;
++            }
++        }
++
+         ((MulticastSocket) mSocket).joinGroup(InetAddress.getByName(address));
+         mIsMulticastSocket = true;
+     }
+diff --git a/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSockets.java b/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSockets.java
+index 93ab3a8..60011d8 100644
+--- a/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSockets.java
++++ b/node_modules/react-native-udp/android/src/main/java/com/tradle/react/UdpSockets.java
+@@ -134,7 +134,7 @@ public final class UdpSockets extends ReactContextBaseJavaModule
+      */
+     @SuppressWarnings("unused")
+     @ReactMethod
+-    public void addMembership(final Integer cId, final String multicastAddress) {
++    public void addMembership(final Integer cId, final String multicastAddress, final String multicastInterface) {
+         executorService.execute(new Thread(new Runnable() {
+             @Override
+             public void run() {
+@@ -153,7 +153,7 @@ public final class UdpSockets extends ReactContextBaseJavaModule
+ 
+                 try {
+                     mMulticastLock.acquire();
+-                    client.addMembership(multicastAddress);
++                    client.addMembership(multicastAddress, multicastInterface);
+                 } catch (IllegalStateException ise) {
+                     // an exception occurred
+                     if (mMulticastLock != null && mMulticastLock.isHeld()) {
+diff --git a/node_modules/react-native-udp/src/UdpSocket.js b/node_modules/react-native-udp/src/UdpSocket.js
+index 4f65986..9ef3627 100644
+--- a/node_modules/react-native-udp/src/UdpSocket.js
++++ b/node_modules/react-native-udp/src/UdpSocket.js
+@@ -396,10 +396,7 @@ export default class UdpSocket extends EventEmitter {
+    */
+   addMembership(multicastAddress, multicastInterface) {
+     if (this._state !== STATE.BOUND) throw new Error('you must bind before addMembership()')
+-    if (multicastInterface) {
+-      console.warn('react-native-udp: addMembership() ignores `multicastInterface` parameter')
+-    }
+-    Sockets.addMembership(this._id, multicastAddress)
++    Sockets.addMembership(this._id, multicastAddress, multicastInterface || null)
+   }
+ 
+   /**

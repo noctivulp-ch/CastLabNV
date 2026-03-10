@@ -2,39 +2,57 @@ import {Device} from "../types/Device";
 import {MediaInfo} from "../types/MediaInfo";
 import {initTranslate} from "../../localization/translate";
 
+/**
+ * Map of file extensions to MIME types supported for casting (DLNA/FCast).
+ * Used both for MIME detection and as a whitelist to filter real media.
+ */
+export const SUPPORTED_MEDIA_EXTENSIONS: Record<string, string> = {
+    // Video formats
+    'mp4': 'video/mp4',
+    'avi': 'video/x-msvideo',
+    'mkv': 'video/x-matroska',
+    'mov': 'video/quicktime',
+    'webm': 'video/webm',
+    '3gp': 'video/3gpp',
+    'm4v': 'video/mp4',
+    'mts': 'video/mp2t',
+    // Streaming formats
+    'm3u8': 'application/vnd.apple.mpegurl',
+    'm3u': 'audio/mpegurl',
+    // Audio formats
+    'mp3': 'audio/mpeg',
+    'aac': 'audio/aac',
+    'm4a': 'audio/mp4',
+    'ogg': 'audio/ogg',
+    'wav': 'audio/wav',
+    'flac': 'audio/flac',
+    'wma': 'audio/x-ms-wma',
+    'opus': 'audio/opus',
+    // Image formats
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'bmp': 'image/bmp',
+    'webp': 'image/webp',
+    'tiff': 'image/tiff',
+    'tif': 'image/tiff',
+};
+
 export class CastUtils {
     private static i18n = initTranslate();
 
     static getMimeTypeFromUrl(url: string): string {
         const extension = url.split('.').pop()?.toLowerCase();
-        const mimeTypes: Record<string, string> = {
-            // Video formats
-            'mp4': 'video/mp4',
-            'avi': 'video/x-msvideo',
-            'mkv': 'video/x-matroska',
-            'mov': 'video/quicktime',
-            'webm': 'video/webm',
-            '3gp': 'video/3gpp',
-            'm4v': 'video/mp4',
-            // Audio formats
-            'mp3': 'audio/mpeg',
-            'aac': 'audio/aac',
-            'm4a': 'audio/mp4',
-            'ogg': 'audio/ogg',
-            'wav': 'audio/wav',
-            'flac': 'audio/flac',
-            // Image formats
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'png': 'image/png',
-            'gif': 'image/gif',
-            'bmp': 'image/bmp',
-            'webp': 'image/webp',
-            'tiff': 'image/tiff',
-            'tif': 'image/tiff'
-        };
+        return extension ? (SUPPORTED_MEDIA_EXTENSIONS[extension] || 'application/octet-stream') : 'application/octet-stream';
+    }
 
-        return extension ? (mimeTypes[extension] || 'application/octet-stream') : 'application/octet-stream';
+    /**
+     * Checks if a file extension is a supported castable media format.
+     */
+    static isSupportedExtension(filename: string): boolean {
+        const ext = filename?.split('.').pop()?.toLowerCase();
+        return !!ext && ext in SUPPORTED_MEDIA_EXTENSIONS;
     }
 
     static validateMediaInfo(mediaInfo: MediaInfo): { isValid: boolean; errors: string[] } {

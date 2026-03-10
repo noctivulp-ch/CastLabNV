@@ -123,7 +123,8 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
                 const insertedId = Array.isArray(result) && result.length > 0 ? result[0].id : newPlaylist.id;
                 (navigation as any).navigate('PlaylistEdit', {
                     playlistId: insertedId,
-                    isNew: true
+                    isNew: true,
+                    playlistName: newPlaylistName,
                 });
                 setCreateDialogVisible(false);
                 setNewPlaylistName('');
@@ -197,7 +198,8 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
             }
             try {
                 (navigation as any).navigate('PlaylistEdit', {
-                    playlistId: playlist.id
+                    playlistId: playlist.id,
+                    playlistName: playlist.name,
                 });
             } catch (error) {
                 console.error('Failed to navigate to PlaylistEdit:', error);

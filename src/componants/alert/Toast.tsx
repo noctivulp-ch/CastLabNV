@@ -11,9 +11,10 @@ interface SnackbarProps {
     text2?: string, //Bottom text
     visible: boolean, //Visible
     onToastHide?: () => void, //When hide is triggered after time
+    bottomOffset?: number, //Offset from bottom to avoid overlapping player
 }
 
-const ToastMessage: React.FC<SnackbarProps> = ({type, time = 2000, text1, text2, visible, onToastHide}) => {
+const ToastMessage: React.FC<SnackbarProps> = ({type, time = 2000, text1, text2, visible, onToastHide, bottomOffset}) => {
     const {theme} = useContext(ThemeContext);
     useEffect(() => {
         if (visible) {
@@ -68,7 +69,7 @@ const ToastMessage: React.FC<SnackbarProps> = ({type, time = 2000, text1, text2,
     }
 
     return (
-        <Toast config={toastConfig} position={"bottom"} visibilityTime={time} autoHide={true} onHide={onToastHide}/>
+        <Toast config={toastConfig} position={"bottom"} bottomOffset={bottomOffset || 40} visibilityTime={time} autoHide={true} onHide={onToastHide}/>
     );
 };
 export default ToastMessage;

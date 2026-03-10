@@ -81,18 +81,13 @@ export class NotificationService {
 
         try {
             const isPlaying = playbackState?.isPlaying ?? false;
-            const statusIcon = isPlaying ? '▶️' : '⏸️';
-            const statusText = isPlaying ? this.i18n.t('play') : this.i18n.t('pause');
-
 
             // Setup categories BEFORE creating notification
             await this.setupNotificationCategories(isPlaying);
 
             const content: Notifications.NotificationContentInput = {
                 title: `CastLab - ${device.name}`,
-                body: mediaTitle
-                    ? `${statusIcon} ${mediaTitle} • ${statusText}`
-                    : `${this.i18n.t('cast_on')} ${device.manufacturer || 'DLNA'}`,
+                body: mediaTitle || `${this.i18n.t('cast_on')} ${device.name}`,
                 data: {
                     type: 'casting',
                     deviceId: device.id,

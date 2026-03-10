@@ -1,9 +1,11 @@
 import React, {createContext, Dispatch, ReactNode, useContext, useEffect, useReducer} from "react";
 import {CastManager, PlaybackState} from "../DLNACast/CastManager";
 import {Device} from "../DLNACast/types/Device";
+import {MediaInfo} from "../DLNACast/types/MediaInfo";
 import {CastConfig} from "../DLNACast/config/CastConfig";
 import {useDispatch} from 'react-redux';
 import {clearCast, setCurrentAsset} from '../store/slice/castSlice';
+import {LogService} from '../services/LogService';
 
 const castManager = new CastManager();
 
@@ -21,6 +23,7 @@ interface CastState {
     playbackState: PlaybackState;
     isSearching: boolean;
     castingStarted: boolean;
+    currentMediaInfo: MediaInfo | null;
 }
 
 // Action types
@@ -36,7 +39,8 @@ type CastAction =
     | { type: 'SEARCH_STARTED' }
     | { type: 'SEARCH_STOPPED' }
     | { type: 'CASTING_STARTED' }
-    | { type: 'CASTING_STOPPED' };
+    | { type: 'CASTING_STOPPED' }
+    | { type: 'MEDIA_CAST'; mediaInfo: MediaInfo };
 
 // Initial state
 const initialState: CastState = {
@@ -54,6 +58,7 @@ const initialState: CastState = {
     },
     isSearching: false,
     castingStarted: false,
+    currentMediaInfo: null,
 };
 
 // Reducer function
@@ -124,7 +129,7 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
             return {
                 ...state,
                 isSearching: true,
-                devices: [], // Clear devices when starting new search
+                devices: state.devices.filter(d => d.protocol === 'external-display'), // Keep external displays
                 error: null, // Clear any search-related errors
             };
 
@@ -148,6 +153,12 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
                 progress: 0,
             };
 
+        case 'MEDIA_CAST':
+            return {
+                ...state,
+                currentMediaInfo: action.mediaInfo,
+            };
+
         default:
             return state;
     }
@@ -164,6 +175,8 @@ interface CastManagerContextProps {
     progress: number;
     error: string | null;
     playbackState: PlaybackState;
+    currentMediaInfo: MediaInfo | null;
+    isExternalDisplay: boolean;
 
     // Actions
     castManager: CastManager;
@@ -250,6 +263,10 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         dispatch({type: 'CASTING_STOPPED'});
     };
 
+    const onMediaCast = (mediaInfo: MediaInfo) => {
+        dispatch({type: 'MEDIA_CAST', mediaInfo});
+    };
+
     // Helper functions
     const clearError = () => {
         dispatch({type: 'CLEAR_ERROR'});
@@ -276,6 +293,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
             'castingStopped': onCastingStopped,
             'deviceCapabilityUpdated': onDeviceCapabilityUpdated,
             'mediaCleared': onMediaCleared,
+            'mediaCast': onMediaCast,
         };
 
         // Add all listeners
@@ -308,6 +326,8 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         progress: state.progress,
         error: state.error,
         playbackState: state.playbackState,
+        currentMediaInfo: state.currentMediaInfo,
+        isExternalDisplay: state.connectedDevice?.protocol === 'external-display',
 
         // Actions
         castManager,
@@ -343,7 +363,7 @@ export const useCastConnection = () => {
         try {
             await castManager.connect(device);
         } catch (error) {
-            console.error('Failed to connect to device:', error);
+            LogService.error('Connection', `Failed to connect to device: ${error}`);
         }
     };
 
@@ -351,7 +371,7 @@ export const useCastConnection = () => {
         try {
             await castManager.disconnect();
         } catch (error) {
-            console.error('Failed to disconnect from device:', error);
+            LogService.error('Connection', `Failed to disconnect: ${error}`);
         }
     };
 
@@ -370,7 +390,7 @@ export const useCastSearch = () => {
         try {
             await castManager.startSearch(duration);
         } catch (error) {
-            console.error('Failed to start device search:', error);
+            LogService.error('Search', `Failed to start device search: ${error}`);
         }
     };
 
@@ -378,7 +398,7 @@ export const useCastSearch = () => {
         try {
             await castManager.stopSearch();
         } catch (error) {
-            console.error('Failed to stop device search:', error);
+            LogService.error('Search', `Failed to stop device search: ${error}`);
         }
     };
 
@@ -397,7 +417,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.castMedia(mediaInfo);
         } catch (error) {
-            console.error('Failed to cast media:', error);
+            LogService.error('Cast', `Failed to cast media: ${error}`);
         }
     };
 
@@ -405,7 +425,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.play();
         } catch (error) {
-            console.error('Failed to play:', error);
+            LogService.error('Playback', `Failed to play: ${error}`);
         }
     };
 
@@ -413,7 +433,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.pause();
         } catch (error) {
-            console.error('Failed to pause:', error);
+            LogService.error('Playback', `Failed to pause: ${error}`);
         }
     };
 
@@ -421,7 +441,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.seek(position);
         } catch (error) {
-            console.error('Failed to seek:', error);
+            LogService.error('Playback', `Failed to seek: ${error}`);
         }
     };
 
@@ -429,7 +449,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.setVolume(volume);
         } catch (error) {
-            console.error('Failed to set volume:', error);
+            LogService.error('Playback', `Failed to set volume: ${error}`);
         }
     };
 
@@ -437,7 +457,7 @@ export const useCastPlayback = () => {
         try {
             await castManager.mute(muted);
         } catch (error) {
-            console.error('Failed to mute/unmute:', error);
+            LogService.error('Playback', `Failed to toggle mute: ${error}`);
         }
     };
 
