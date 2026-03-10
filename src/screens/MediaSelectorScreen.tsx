@@ -5,6 +5,7 @@ import {
     Button,
     Checkbox,
     FAB,
+    Icon,
     IconButton,
     Menu,
     PaperProvider,
@@ -473,9 +474,7 @@ const MediaSelectorScreen: React.FC<MediaSelectorScreenProps> = () => {
             >
                 <Surface style={styles.albumCard}>
                     <View style={styles.albumThumbnail}>
-                        <Text variant="headlineMedium" style={styles.albumIcon}>
-                            📁
-                        </Text>
+                        <Icon source="folder" size={32} color={theme.colors.primary} />
                     </View>
                     <View style={styles.albumInfo}>
                         <Text variant="titleMedium" numberOfLines={2} style={styles.albumTitle}>
@@ -902,10 +901,6 @@ const useStyles = (theme: any) =>
         },
         albumThumbnail: {
             marginBottom: 8,
-        },
-        albumIcon: {
-            fontSize: 32,
-            textAlign: 'center',
         },
         albumInfo: {
             alignItems: 'center',

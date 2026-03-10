@@ -145,18 +145,19 @@ class ScreenCaptureService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val appIcon = applicationInfo.icon
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("CastLab")
                 .setContentText("Screen sharing is active")
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(appIcon)
                 .build()
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("CastLab")
                 .setContentText("Screen sharing is active")
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(appIcon)
                 .build()
         }
     }
