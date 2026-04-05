@@ -18,6 +18,7 @@ export const extractedVideosTable = sqliteTable("extracted_videos_table", {
     title: text().notNull(), // Video title
     thumbnail: text(), // Optional thumbnail URL
     format: text(), // Video format (e.g., "720p", "MP4")
+    dlna_compat: text(), // DLNA compatibility: 'compatible' | 'unsupported' | null
     source: text().notNull(), // Source type: 'video-tag' | 'direct-link' | 'data-attribute' | 'm3u-playlist'
     source_url: text().notNull(), // Original webpage URL
     page_title: text(), // Original page title

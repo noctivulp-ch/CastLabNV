@@ -1,5 +1,5 @@
 import React, {useCallback, useContext, useEffect, useRef, useState} from 'react';
-import {FlatList, Image, Keyboard, StyleSheet, TouchableOpacity, View,} from 'react-native';
+import {FlatList, Image, Keyboard, ScrollView, StyleSheet, TouchableOpacity, View,} from 'react-native';
 import {
     ActivityIndicator,
     Button,
@@ -427,28 +427,24 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
 
                         <View style={styles.videoMeta}>
                             {item.format && (
-                                <Chip mode="outlined" compact style={styles.formatChip} textStyle={styles.chipText}>
+                                <Chip mode="outlined" compact
+                                      icon={item.dlnaCompat === 'unsupported' ? 'alert-outline' : undefined}
+                                      style={styles.formatChip} textStyle={styles.chipText}>
                                     {item.format}
                                 </Chip>
                             )}
-                            <Chip mode="outlined" compact
-                                  icon={item.source === 'video-tag' ? 'xml' : item.source === 'direct-link' ? 'link' : item.source === 'm3u-playlist' ? 'playlist-music' : 'database'}
-                                  style={styles.sourceChip} textStyle={styles.chipText}>
-                                {item.source === 'video-tag' ? i18n.t('video_tag') :
-                                    item.source === 'direct-link' ? i18n.t('direct_link') :
-                                    item.source === 'm3u-playlist' ? i18n.t('m3u_playlist') : i18n.t('data_attribute')}
-                            </Chip>
                         </View>
-
-                        <Text variant="bodySmall" numberOfLines={1} style={styles.videoUrl}>
-                            {item.url}
-                        </Text>
                     </View>
 
                     <TouchableOpacity onPress={() => handleCastVideo(item)} style={styles.castButton}>
                         <IconButton icon="cast" size={24} iconColor={theme.colors.primary}/>
                     </TouchableOpacity>
                 </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.videoUrlScroll}>
+                    <Text variant="labelSmall" numberOfLines={1} style={styles.videoUrl}>
+                        {item.url}
+                    </Text>
+                </ScrollView>
             </Card>
         );
     }, [theme, handleCastVideo, styles, i18n]);
@@ -494,7 +490,9 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
 
                         <View style={styles.videoMeta}>
                             {item.format && (
-                                <Chip mode="outlined" compact style={styles.formatChip} textStyle={styles.chipText}>
+                                <Chip mode="outlined" compact
+                                      icon={item.dlnaCompat === 'unsupported' ? 'alert-outline' : undefined}
+                                      style={styles.formatChip} textStyle={styles.chipText}>
                                     {item.format}
                                 </Chip>
                             )}
@@ -516,6 +514,11 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                         </>
                     )}
                 </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.videoUrlScroll}>
+                    <Text variant="labelSmall" numberOfLines={1} style={styles.videoUrl}>
+                        {item.url}
+                    </Text>
+                </ScrollView>
             </Card>
         );
     }, [theme, selectionMode, selectedHistoryIds, toggleHistorySelection, handleCastVideo, deleteSingleHistory, styles, i18n]);
@@ -980,10 +983,10 @@ const useStyles = (theme: any) => StyleSheet.create({
         alignItems: 'center',
     },
     formatChip: {
-        height: 24,
+        height: 28,
     },
     sourceChip: {
-        height: 24,
+        height: 28,
     },
     chipText: {
         fontSize: 10,
@@ -992,6 +995,10 @@ const useStyles = (theme: any) => StyleSheet.create({
     extractedDate: {
         color: theme.colors.onSurfaceVariant,
         fontSize: 11,
+    },
+    videoUrlScroll: {
+        marginHorizontal: 12,
+        marginBottom: 10,
     },
     videoUrl: {
         color: theme.colors.onSurfaceVariant,

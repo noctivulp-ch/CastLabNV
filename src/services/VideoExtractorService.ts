@@ -10,6 +10,7 @@ export interface ExtractedVideo {
     title: string;
     thumbnail?: string;
     format?: string;
+    dlnaCompat?: 'unknown' | 'compatible' | 'unsupported';
     source: 'video-tag' | 'direct-link' | 'data-attribute' | 'm3u-playlist';
 }
 
@@ -497,7 +498,7 @@ export class VideoExtractorService {
         if (data.streamingPlaylists && Array.isArray(data.streamingPlaylists)) {
             const existingIds = new Set(videos.map(v => v.id));
             data.streamingPlaylists.forEach((playlist: any) => {
-                // Per-resolution MP4 files (DLNA compatible)
+                // Per-resolution fMP4 files (may not work on all DLNA renderers)
                 if (playlist.files && Array.isArray(playlist.files)) {
                     playlist.files.forEach((file: any) => {
                         const id = `peertube_${videoId}_${file.resolution.id}`;
@@ -508,12 +509,13 @@ export class VideoExtractorService {
                                 title: `${data.name} (${file.resolution.label})`,
                                 thumbnail: data.thumbnailPath ? `${baseUrl}${data.thumbnailPath}` : undefined,
                                 format: file.resolution.label,
+                                dlnaCompat: 'unsupported',
                                 source: 'video-tag'
                             });
                         }
                     });
                 }
-                // HLS master playlist (last resort, not supported by all DLNA renderers)
+                // HLS master playlist (not supported by most DLNA renderers)
                 if (playlist.playlistUrl) {
                     videos.push({
                         id: `peertube_${videoId}_hls`,
@@ -521,6 +523,7 @@ export class VideoExtractorService {
                         title: `${data.name} (HLS)`,
                         thumbnail: data.thumbnailPath ? `${baseUrl}${data.thumbnailPath}` : undefined,
                         format: 'HLS',
+                        dlnaCompat: 'unsupported',
                         source: 'video-tag'
                     });
                 }

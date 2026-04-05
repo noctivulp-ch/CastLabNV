@@ -1,0 +1,1 @@
+ALTER TABLE `extracted_videos_table` ADD `dlna_compat` text;

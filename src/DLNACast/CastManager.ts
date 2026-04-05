@@ -1770,7 +1770,11 @@ ${body}
      * @returns Complete icon URL.
      */
     private buildIconUrl(iconPath: string, baseLocation: string): string {
-        return new URL(iconPath, baseLocation).toString();
+        if (iconPath.startsWith('http')) {
+            return iconPath;
+        }
+        const baseUrl = baseLocation.replace(/\/[^/]*\.[^/]*$/, '').replace(/\/+$/, '');
+        return `${baseUrl}${iconPath.startsWith('/') ? '' : '/'}${iconPath}`;
     }
 
     /**

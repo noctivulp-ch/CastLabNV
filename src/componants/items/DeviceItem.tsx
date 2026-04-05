@@ -9,16 +9,18 @@ export type AssetItemProps = {
 };
 
 const DeviceItem: React.FC<AssetItemProps> = ({device, onPressed}) => {
+    const [iconError, setIconError] = React.useState(false);
+    const showImage = device.iconUrl && !iconError;
 
     return (
         <Pressable onPress={(event) => {
             onPressed(event, device);
         }}
                    style={({pressed}) => [pressed && styles.pressed, styles.container]}>
-            {device.iconUrl &&
-                <Image width={24} height={24} source={{uri: device.iconUrl}}/>
+            {showImage &&
+                <Image width={24} height={24} source={{uri: device.iconUrl}} onError={() => setIconError(true)}/>
             }
-            {!device.iconUrl &&
+            {!showImage &&
                 <Icon size={24}
                       source={device.protocol === 'fcast' ? 'cast-variant'
                           : device.protocol === 'external-display' ? 'monitor'
