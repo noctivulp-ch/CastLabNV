@@ -38,8 +38,8 @@ const AlbumsScreen = forwardRef<AlbumsScreenRef, AlbumsProps>(({
     const [albumMediaTypes, setAlbumMediaTypes] = useState<Record<string, Set<string>>>({});
     const [validAlbums, setValidAlbums] = useState<Set<string> | null>(null);
 
-    // Media library permissions
-    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+    // Media library permissions - requestPermissionsOnMount ensures the dialog is shown immediately
+    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions({request: true});
 
     // Use the centralized scroll direction hook
     const {handleScroll, resetScroll} = useScrollDirection({
@@ -165,12 +165,7 @@ const AlbumsScreen = forwardRef<AlbumsScreenRef, AlbumsProps>(({
                 setAppIsReady(true);
                 resetScroll();
                 detectAlbumMediaTypes(albums);
-            } else if (permissionResponse?.status === 'denied') {
-                // Permission denied, show empty state
-                setAlbums([]);
-                setAppIsReady(true);
-            } else if (permissionResponse?.status === 'undetermined') {
-                // Permission not yet requested, request it
+            } else {
                 const albums = await getAlbums();
                 setAlbums(albums);
                 setAppIsReady(true);
