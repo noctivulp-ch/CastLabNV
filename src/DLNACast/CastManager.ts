@@ -1067,7 +1067,13 @@ export class CastManager extends EventEmitter {
 
                             if (!response.ok) {
                                 const errorText = await response.text();
-                                throw new Error(`HTTP ${response.status}: ${errorText}`);
+                                // Parse UPnP error from SOAP fault XML
+                                const descMatch = errorText.match(/<errorDescription>([^<]+)<\/errorDescription>/);
+                                const codeMatch = errorText.match(/<errorCode>([^<]+)<\/errorCode>/);
+                                if (descMatch) {
+                                    throw new Error(codeMatch ? `UPnP ${codeMatch[1]}: ${descMatch[1]}` : descMatch[1]);
+                                }
+                                throw new Error(`HTTP ${response.status}`);
                             }
 
                             const xml = await response.text();

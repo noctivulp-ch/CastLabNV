@@ -493,9 +493,27 @@ export class VideoExtractorService {
             });
         }
 
-        // Add HLS streams if available
+        // Extract direct MP4 files and HLS from streaming playlists
         if (data.streamingPlaylists && Array.isArray(data.streamingPlaylists)) {
+            const existingIds = new Set(videos.map(v => v.id));
             data.streamingPlaylists.forEach((playlist: any) => {
+                // Per-resolution MP4 files (DLNA compatible)
+                if (playlist.files && Array.isArray(playlist.files)) {
+                    playlist.files.forEach((file: any) => {
+                        const id = `peertube_${videoId}_${file.resolution.id}`;
+                        if (file.fileUrl && !existingIds.has(id)) {
+                            videos.push({
+                                id,
+                                url: file.fileUrl,
+                                title: `${data.name} (${file.resolution.label})`,
+                                thumbnail: data.thumbnailPath ? `${baseUrl}${data.thumbnailPath}` : undefined,
+                                format: file.resolution.label,
+                                source: 'video-tag'
+                            });
+                        }
+                    });
+                }
+                // HLS master playlist (last resort, not supported by all DLNA renderers)
                 if (playlist.playlistUrl) {
                     videos.push({
                         id: `peertube_${videoId}_hls`,
