@@ -40,7 +40,8 @@ type CastAction =
     | { type: 'SEARCH_STOPPED' }
     | { type: 'CASTING_STARTED' }
     | { type: 'CASTING_STOPPED' }
-    | { type: 'MEDIA_CAST'; mediaInfo: MediaInfo };
+    | { type: 'MEDIA_CAST'; mediaInfo: MediaInfo }
+    | { type: 'DEVICE_REMOVED'; device: Device };
 
 // Initial state
 const initialState: CastState = {
@@ -91,6 +92,12 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
                     ...state.devices.filter(d => d.id !== action.device.id),
                     action.device
                 ].sort((a, b) => a.name.localeCompare(b.name)), // Keep devices sorted by name
+            };
+
+        case 'DEVICE_REMOVED':
+            return {
+                ...state,
+                devices: state.devices.filter(d => d.id !== action.device.id),
             };
 
         case 'DEVICES_CLEARED':
@@ -247,6 +254,10 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         dispatch({type: 'CASTING_STOPPED'});
     };
 
+    const onDeviceRemoved = (device: Device) => {
+        dispatch({type: 'DEVICE_REMOVED', device});
+    };
+
     const onDeviceCapabilityUpdated = (device: Device) => {
         // Update device in the list
         dispatch({type: 'DEVICE_ADDED', device});
@@ -284,6 +295,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
             'disconnected': onDisconnected,
             'connected': onConnected,
             'deviceAdded': onDeviceAdded,
+            'deviceRemoved': onDeviceRemoved,
             'progressChanged': onProgressChanged,
             'stateChanged': onStateChanged,
             'error': onError,

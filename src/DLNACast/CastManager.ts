@@ -37,7 +37,8 @@ interface CacheEntry {
 
 export class CastManager extends EventEmitter {
     private i18n = initTranslate();
-    private socket: any = null; // UDP socket for SSDP
+    private socket: any = null; // UDP socket for SSDP (M-SEARCH)
+    private notifySocket: any = null; // UDP socket for SSDP NOTIFY (port 1900)
     private searching = false; // Discovery state
     private devices: Map<string, Device> = new Map(); // Discovered devices
     private timeout: NodeJS.Timeout | null = null; // Search timeout
@@ -372,6 +373,30 @@ export class CastManager extends EventEmitter {
             this.emit('error', this.i18n.t('error.socket', {message: err.message}));
         });
 
+        // Start SSDP NOTIFY listener (port 1900 for receiving multicast advertisements)
+        // Some devices may not respond to M-SEARCH but broadcast NOTIFY
+        this.notifySocket = Udp.createSocket({type: 'udp4', reusePort: true});
+        this.notifySocket.bind(SSDP_PORT, () => {
+            try {
+                this.notifySocket.addMembership(MULTICAST_ADDRESS, localIp);
+            } catch (err) {
+                try {
+                    this.notifySocket.addMembership(MULTICAST_ADDRESS, null);
+                } catch (err2) {
+                    LogService.warn('Multicast', `NOTIFY socket: multicast join failed: ${err2}`);
+                }
+            }
+            LogService.info('SSDP', 'NOTIFY listener started on port 1900');
+        });
+
+        this.notifySocket.on('message', (msg: Buffer, rinfo: any) => {
+            this.handleSsdpResponse(msg.toString(), rinfo);
+        });
+
+        this.notifySocket.on('error', (err: Error) => {
+            LogService.warn('SSDP', `NOTIFY socket error: ${err.message}`);
+        });
+
         // Start FCast mDNS discovery
         this.startFCastDiscovery();
 
@@ -408,6 +433,21 @@ export class CastManager extends EventEmitter {
                 socketToClose.once?.('close', resolve);
                 socketToClose.close();
                 // Fallback timeout in case 'close' event doesn't fire
+                setTimeout(resolve, 500);
+            });
+        }
+
+        if (this.notifySocket) {
+            try {
+                this.notifySocket.dropMembership(MULTICAST_ADDRESS);
+            } catch (err) {
+                LogService.warn('Multicast', `NOTIFY socket: failed to leave multicast group: ${err}`);
+            }
+            const notifyToClose = this.notifySocket;
+            this.notifySocket = null;
+            await new Promise<void>((resolve) => {
+                notifyToClose.once?.('close', resolve);
+                notifyToClose.close();
                 setTimeout(resolve, 500);
             });
         }
@@ -1117,13 +1157,26 @@ export class CastManager extends EventEmitter {
         let deviceLocation: string | undefined;
         try {
             const headers = this.parseHeaders(response);
-            const st = headers['ST'];
+
+            // Support both M-SEARCH responses (ST header) and NOTIFY advertisements (NT header)
+            const st = headers['ST'] || headers['NT'];
             deviceLocation = headers['LOCATION'];
             const usn = headers['USN']?.trim();
 
+            // Handle NOTIFY byebye: device is leaving the network
+            if (headers['NTS'] === 'ssdp:byebye') {
+                if (usn && this.devices.has(usn)) {
+                    const device = this.devices.get(usn)!;
+                    this.devices.delete(usn);
+                    this.pendingLocations.delete(deviceLocation || '');
+                    LogService.info('SSDP', `Device left: ${device.name}`);
+                    this.emit('deviceRemoved', device);
+                }
+                return;
+            }
+
             // Validate headers and check for duplicates early
             if (!st || !deviceLocation || !usn) {
-                LogService.warn('SSDP', 'Invalid response: missing ST, LOCATION, or USN headers');
                 return;
             }
 
@@ -1137,6 +1190,7 @@ export class CastManager extends EventEmitter {
             const isRenderer = st === DLNA_RENDERER_ST;
             const isUpnpDevice = st.includes('upnp') || st.includes('schemas-upnp-org') || st === SEARCH_TARGET_ALL;
             if (!isRenderer && !isUpnpDevice) {
+                this.pendingLocations.delete(deviceLocation);
                 return;
             }
 
