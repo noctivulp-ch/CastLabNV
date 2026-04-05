@@ -980,9 +980,7 @@ export class CastManager extends EventEmitter {
         }
 
         const device = this.currentDevice!;
-        const baseUrl = device.location.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
-        const servicePath = device.services![serviceType].replace(/^\/+/, '');
-        const serviceUrl = `${baseUrl}/${servicePath}`;
+        const serviceUrl = new URL(device.services![serviceType], device.location).toString();
 
         // Use a much shorter timeout for play/pause actions
         const actionTimeout = (action === 'Play' || action === 'Pause') ? 3000 : REQUEST_TIMEOUT;
@@ -1712,12 +1710,7 @@ ${body}
      * @returns Complete icon URL.
      */
     private buildIconUrl(iconPath: string, baseLocation: string): string {
-        if (iconPath.startsWith('http')) {
-            return iconPath;
-        } else {
-            const baseUrl = baseLocation.replace(/\/desc\.xml$/, '').replace(/\/+$/, '');
-            return `${baseUrl}${iconPath.startsWith('/') ? '' : '/'}${iconPath}`;
-        }
+        return new URL(iconPath, baseLocation).toString();
     }
 
     /**
