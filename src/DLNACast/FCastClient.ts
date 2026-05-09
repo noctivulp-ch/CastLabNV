@@ -21,11 +21,13 @@ enum FCastOpcode {
     PlaybackUpdate = 6,
     VolumeUpdate = 7,
     SetVolume = 8,
+    PlaybackError = 9,
     SetSpeed = 10,
     Version = 11,
     Ping = 12,
     Pong = 13,
     Initial = 14,
+    PlayUpdate = 15,
     SetPlaylistItem = 16,
 }
 
@@ -33,6 +35,10 @@ enum FCastPlaybackState {
     Idle = 0,
     Playing = 1,
     Paused = 2,
+}
+
+enum FCastMetadataType {
+    Generic = 0,
 }
 
 interface FCastPlayMessage {
@@ -44,10 +50,9 @@ interface FCastPlayMessage {
     speed?: number;
     headers?: Record<string, string>;
     metadata?: {
+        type: number;
         title?: string;
-        artist?: string;
-        album?: string;
-        artworkUrl?: string;
+        thumbnailUrl?: string;
     };
 }
 
@@ -159,15 +164,13 @@ export class FCastClient extends EventEmitter {
             time: 0,
         };
 
-        if (mediaInfo.metadata?.title) {
-            message.metadata = {
-                title: mediaInfo.metadata.title,
-            };
-            if (mediaInfo.metadata.images?.[0]?.url) {
-                message.metadata.artworkUrl = mediaInfo.metadata.images[0].url;
-            }
-        }
+        message.metadata = {
+            type: FCastMetadataType.Generic,
+            title: mediaInfo.metadata?.title,
+            thumbnailUrl: mediaInfo.metadata?.images?.[0]?.url,
+        };
 
+        LogService.info('FCast', `Play: ${mediaInfo.contentUrl} (${mimeType})`);
         this.sendPacket(FCastOpcode.Play, message);
     }
 
@@ -291,6 +294,12 @@ export class FCastClient extends EventEmitter {
                 if (body?.playData) {
                     this.handlePlaybackUpdate(body.playData as FCastPlaybackUpdate);
                 }
+                break;
+            case FCastOpcode.PlaybackError:
+                LogService.error('FCast', `Playback error: ${body?.message || JSON.stringify(body)}`);
+                this.emit('error', body?.message || 'Playback error');
+                break;
+            case FCastOpcode.PlayUpdate:
                 break;
             default:
                 LogService.info('FCast', `Unknown opcode: ${opcode}`);
