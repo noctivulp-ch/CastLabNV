@@ -1,0 +1,12 @@
+Added
+- UPnP embedded device discovery (sub-devices)
+- FCast PlaybackError handling for better error reporting
+- Full FCast protocol v3 opcode support
+
+Fixed
+- FCast casting not working on some receivers (missing metadata type)
+- DLNA 404 with special characters in filenames
+
+Improved
+- Real error messages on media file copy failures
+- Filename sanitization for reliable HTTP serving
