@@ -20,11 +20,12 @@ const DeviceItem: React.FC<AssetItemProps> = ({device, onPressed}) => {
             {showImage &&
                 <Image width={24} height={24} source={{uri: device.iconUrl}} onError={() => setIconError(true)}/>
             }
-            {!showImage &&
+            {!showImage && device.protocol === 'fcast' &&
+                <Image style={{width: 24, height: 24}} source={require('../../../assets/fcast.png')}/>
+            }
+            {!showImage && device.protocol !== 'fcast' &&
                 <Icon size={24}
-                      source={device.protocol === 'fcast' ? 'cast-variant'
-                          : device.protocol === 'external-display' ? 'monitor'
-                          : 'television'}/>
+                      source={device.protocol === 'external-display' ? 'monitor' : 'television'}/>
             }
             <Text style={styles.text}>{device.name}</Text>
         </Pressable>
