@@ -9,7 +9,7 @@ import {initTranslate} from "../localization/translate";
 import {CastUtils} from './utils/CastUtils';
 import {CastConfig} from './config/CastConfig';
 import {LogService} from '../services/LogService';
-import {FCastClient, FCAST_PORT} from './FCastClient';
+import {FCAST_PORT, FCastClient} from './FCastClient';
 import Zeroconf from 'react-native-zeroconf';
 import {ExternalDisplayController} from './types/ExternalDisplayController';
 
@@ -36,6 +36,8 @@ interface CacheEntry {
 }
 
 export class CastManager extends EventEmitter {
+    private static readonly FCAST_MAX_RECONNECT = 3;
+    private static readonly FCAST_RECONNECT_DELAY = 3000;
     private i18n = initTranslate();
     private socket: any = null; // UDP socket for SSDP (M-SEARCH)
     private notifySocket: any = null; // UDP socket for SSDP NOTIFY (port 1900)
@@ -60,8 +62,6 @@ export class CastManager extends EventEmitter {
     private fcastReconnectAttempts = 0;
     private fcastReconnectTimer: NodeJS.Timeout | null = null;
     private intentionalDisconnect = false;
-    private static readonly FCAST_MAX_RECONNECT = 3;
-    private static readonly FCAST_RECONNECT_DELAY = 3000;
     private externalDisplayController: ExternalDisplayController | null = null;
     private externalDisplayState: PlaybackState = {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
 
@@ -104,17 +104,6 @@ export class CastManager extends EventEmitter {
      */
     getCurrentMediaTitle(): string | null {
         return this.currentMediaInfo?.metadata?.title || null;
-    }
-
-    /**
-     * Checks if the current device uses the FCast protocol.
-     */
-    private isFCastDevice(): boolean {
-        return this.currentDevice?.protocol === 'fcast';
-    }
-
-    private isExternalDisplayDevice(): boolean {
-        return this.currentDevice?.protocol === 'external-display';
     }
 
     setExternalDisplayController(controller: ExternalDisplayController | null): void {
@@ -175,115 +164,6 @@ export class CastManager extends EventEmitter {
         this.devices.set(device.id, device);
         LogService.info('FCast', `Manual device added: ${device.name} at ${ip}:${port}`);
         this.emit('deviceAdded', device);
-    }
-
-    /**
-     * Starts mDNS discovery for FCast receivers (_fcast._tcp).
-     */
-    private startFCastDiscovery(): void {
-        try {
-            this.zeroconf = new Zeroconf();
-
-            this.zeroconf.on('resolved', (service: any) => {
-                const ip = service.addresses?.find((addr: string) => addr.includes('.'));
-                if (!ip) return;
-
-                const port = service.port || FCAST_PORT;
-                const name = service.name || `FCast (${ip})`;
-                const deviceId = `fcast-${ip}:${port}`;
-
-                if (!this.devices.has(deviceId)) {
-                    const device: Device = {
-                        id: deviceId,
-                        name,
-                        location: `tcp://${ip}:${port}`,
-                        ip,
-                        port,
-                        services: {},
-                        protocol: 'fcast',
-                    };
-                    this.devices.set(deviceId, device);
-                    LogService.info('FCast', `Discovered via mDNS: ${name} at ${ip}:${port}`);
-                    this.emit('deviceAdded', device);
-                }
-            });
-
-            this.zeroconf.on('error', (err: any) => {
-                LogService.warn('FCast', `mDNS discovery error: ${err}`);
-            });
-
-            this.zeroconf.scan('fcast', 'tcp');
-            LogService.info('FCast', 'mDNS discovery started (_fcast._tcp)');
-        } catch (err) {
-            LogService.warn('FCast', `Failed to start mDNS discovery: ${err}`);
-        }
-    }
-
-    private stopFCastDiscovery(): void {
-        if (this.zeroconf) {
-            try {
-                this.zeroconf.stop();
-                this.zeroconf.removeAllListeners();
-            } catch (err) {
-                LogService.warn('FCast', `Error stopping mDNS discovery: ${err}`);
-            }
-            this.zeroconf = null;
-        }
-    }
-
-    private attemptFCastReconnect(device: Device): void {
-        this.fcastReconnectAttempts++;
-
-        if (this.fcastReconnectAttempts > CastManager.FCAST_MAX_RECONNECT) {
-            LogService.warn('FCast', `Reconnect failed after ${CastManager.FCAST_MAX_RECONNECT} attempts, giving up`);
-            this.currentDevice = null;
-            this.fcastReconnectAttempts = 0;
-            this.cancelFCastReconnect();
-            this.emit('disconnected');
-            this.emit('mediaCleared');
-            return;
-        }
-
-        LogService.info('FCast', `Reconnect attempt ${this.fcastReconnectAttempts}/${CastManager.FCAST_MAX_RECONNECT} in ${CastManager.FCAST_RECONNECT_DELAY / 1000}s...`);
-
-        this.fcastReconnectTimer = setTimeout(async () => {
-            try {
-                this.fcastClient = new FCastClient(device.ip, device.port);
-
-                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
-                    this.emit('stateChanged', state);
-                    this.emit('progressChanged', state.position);
-                });
-
-                this.fcastClient.on('volumeUpdate', (_volume: number) => {});
-
-                this.fcastClient.on('error', (message: string) => {
-                    this.emit('error', message);
-                });
-
-                this.fcastClient.on('disconnected', () => {
-                    this.fcastClient = null;
-                    if (this.intentionalDisconnect) return;
-                    this.attemptFCastReconnect(device);
-                });
-
-                await this.fcastClient.connect();
-                this.fcastReconnectAttempts = 0;
-                LogService.info('FCast', 'Reconnected successfully');
-            } catch (err) {
-                LogService.warn('FCast', `Reconnect attempt ${this.fcastReconnectAttempts} failed: ${err}`);
-                this.fcastClient = null;
-                this.attemptFCastReconnect(device);
-            }
-        }, CastManager.FCAST_RECONNECT_DELAY);
-    }
-
-    private cancelFCastReconnect(): void {
-        if (this.fcastReconnectTimer) {
-            clearTimeout(this.fcastReconnectTimer);
-            this.fcastReconnectTimer = null;
-        }
-        this.fcastReconnectAttempts = 0;
     }
 
     /**
@@ -972,6 +852,126 @@ export class CastManager extends EventEmitter {
     }
 
     /**
+     * Checks if the current device uses the FCast protocol.
+     */
+    private isFCastDevice(): boolean {
+        return this.currentDevice?.protocol === 'fcast';
+    }
+
+    private isExternalDisplayDevice(): boolean {
+        return this.currentDevice?.protocol === 'external-display';
+    }
+
+    /**
+     * Starts mDNS discovery for FCast receivers (_fcast._tcp).
+     */
+    private startFCastDiscovery(): void {
+        try {
+            this.zeroconf = new Zeroconf();
+
+            this.zeroconf.on('resolved', (service: any) => {
+                const ip = service.addresses?.find((addr: string) => addr.includes('.'));
+                if (!ip) return;
+
+                const port = service.port || FCAST_PORT;
+                const name = service.name || `FCast (${ip})`;
+                const deviceId = `fcast-${ip}:${port}`;
+
+                if (!this.devices.has(deviceId)) {
+                    const device: Device = {
+                        id: deviceId,
+                        name,
+                        location: `tcp://${ip}:${port}`,
+                        ip,
+                        port,
+                        services: {},
+                        protocol: 'fcast',
+                    };
+                    this.devices.set(deviceId, device);
+                    LogService.info('FCast', `Discovered via mDNS: ${name} at ${ip}:${port}`);
+                    this.emit('deviceAdded', device);
+                }
+            });
+
+            this.zeroconf.on('error', (err: any) => {
+                LogService.warn('FCast', `mDNS discovery error: ${err}`);
+            });
+
+            this.zeroconf.scan('fcast', 'tcp');
+            LogService.info('FCast', 'mDNS discovery started (_fcast._tcp)');
+        } catch (err) {
+            LogService.warn('FCast', `Failed to start mDNS discovery: ${err}`);
+        }
+    }
+
+    private stopFCastDiscovery(): void {
+        if (this.zeroconf) {
+            try {
+                this.zeroconf.stop();
+                this.zeroconf.removeAllListeners();
+            } catch (err) {
+                LogService.warn('FCast', `Error stopping mDNS discovery: ${err}`);
+            }
+            this.zeroconf = null;
+        }
+    }
+
+    private attemptFCastReconnect(device: Device): void {
+        this.fcastReconnectAttempts++;
+
+        if (this.fcastReconnectAttempts > CastManager.FCAST_MAX_RECONNECT) {
+            LogService.warn('FCast', `Reconnect failed after ${CastManager.FCAST_MAX_RECONNECT} attempts, giving up`);
+            this.currentDevice = null;
+            this.fcastReconnectAttempts = 0;
+            this.cancelFCastReconnect();
+            this.emit('disconnected');
+            this.emit('mediaCleared');
+            return;
+        }
+
+        LogService.info('FCast', `Reconnect attempt ${this.fcastReconnectAttempts}/${CastManager.FCAST_MAX_RECONNECT} in ${CastManager.FCAST_RECONNECT_DELAY / 1000}s...`);
+
+        this.fcastReconnectTimer = setTimeout(async () => {
+            try {
+                this.fcastClient = new FCastClient(device.ip, device.port);
+
+                this.fcastClient.on('playbackUpdate', (state: PlaybackState) => {
+                    this.emit('stateChanged', state);
+                    this.emit('progressChanged', state.position);
+                });
+
+                this.fcastClient.on('volumeUpdate', (_volume: number) => {});
+
+                this.fcastClient.on('error', (message: string) => {
+                    this.emit('error', message);
+                });
+
+                this.fcastClient.on('disconnected', () => {
+                    this.fcastClient = null;
+                    if (this.intentionalDisconnect) return;
+                    this.attemptFCastReconnect(device);
+                });
+
+                await this.fcastClient.connect();
+                this.fcastReconnectAttempts = 0;
+                LogService.info('FCast', 'Reconnected successfully');
+            } catch (err) {
+                LogService.warn('FCast', `Reconnect attempt ${this.fcastReconnectAttempts} failed: ${err}`);
+                this.fcastClient = null;
+                this.attemptFCastReconnect(device);
+            }
+        }, CastManager.FCAST_RECONNECT_DELAY);
+    }
+
+    private cancelFCastReconnect(): void {
+        if (this.fcastReconnectTimer) {
+            clearTimeout(this.fcastReconnectTimer);
+            this.fcastReconnectTimer = null;
+        }
+        this.fcastReconnectAttempts = 0;
+    }
+
+    /**
      * Start heartbeat to maintain connection during media playback
      */
     private startHeartbeat(): void {
@@ -1225,7 +1225,7 @@ export class CastManager extends EventEmitter {
             const parsed = this.xmlParser.parse(descXml);
 
             if (!parsed?.root?.device) {
-                LogService.warn('SSDP', 'Invalid device description XML: missing root device element');
+                LogService.warn('SSDP', `Invalid device description XML: ${deviceLocation}`);
                 this.pendingLocations.delete(deviceLocation);
                 return;
             }
@@ -1296,20 +1296,29 @@ export class CastManager extends EventEmitter {
     private extractServices(parsed: any): Record<string, string> {
         const services: Record<string, string> = {};
 
-        try {
-            const serviceList = parsed.root?.device?.serviceList?.service;
-            if (!serviceList) return services;
-
-            const servicesArray = Array.isArray(serviceList) ? serviceList : [serviceList];
-
-            servicesArray.forEach((service: any) => {
-                if (service?.serviceType && service?.controlURL) {
-                    const type = service.serviceType;
-                    if (type.includes('AVTransport') || type.includes('RenderingControl')) {
-                        services[type] = service.controlURL;
+        const collectFromDevice = (device: any) => {
+            const serviceList = device?.serviceList?.service;
+            if (serviceList) {
+                const list = Array.isArray(serviceList) ? serviceList : [serviceList];
+                list.forEach((service: any) => {
+                    if (service?.serviceType && service?.controlURL) {
+                        const type = service.serviceType;
+                        if (type.includes('AVTransport') || type.includes('RenderingControl')) {
+                            services[type] = service.controlURL;
+                        }
                     }
-                }
-            });
+                });
+            }
+            // Recurse into embedded devices
+            const embedded = device?.deviceList?.device;
+            if (embedded) {
+                const devices = Array.isArray(embedded) ? embedded : [embedded];
+                devices.forEach(collectFromDevice);
+            }
+        };
+
+        try {
+            collectFromDevice(parsed.root?.device);
         } catch (err) {
             LogService.warn('SSDP', `Error extracting device services: ${err}`);
         }
