@@ -1,6 +1,6 @@
 import React, {useCallback, useContext, useEffect, useState} from 'react';
 import {Linking, ScrollView, Share, StyleSheet, TouchableOpacity, View} from 'react-native';
-import {Divider, IconButton, List, Text} from 'react-native-paper';
+import {Divider, Icon, IconButton, List, Text} from 'react-native-paper';
 import {ThemeContext} from '../contexts/theme-context';
 import {initTranslate} from '../localization/translate';
 import {SvgXml} from 'react-native-svg';
@@ -130,7 +130,7 @@ const AboutScreen: React.FC = () => {
                                 xml={paypalSvg}
                                 width={32}
                                 height={32}
-                                color={theme.colors.primary}
+                                color={theme.colors.onPrimary}
                             />
                         ) : (
                             <IconButton icon="loading" size={24} iconColor={theme.colors.primary}/>
@@ -148,11 +148,20 @@ const AboutScreen: React.FC = () => {
                                 xml={liberapaySvg}
                                 width={32}
                                 height={32}
-                                color={theme.colors.primary}
+                                color={theme.colors.onPrimary}
                             />
                         ) : (
                             <IconButton icon="loading" size={24} iconColor={theme.colors.primary}/>
                         )}
+                    </TouchableOpacity>
+
+                    {/* Ko-fi Button */}
+                    <TouchableOpacity
+                        onPress={() => openURL('https://ko-fi.com/tom79')}
+                        style={[styles.donationButton, {backgroundColor: theme.colors.primary}]}
+                        accessibilityLabel="Donate via Ko-fi"
+                    >
+                        <Icon source="coffee" size={32} color={theme.colors.onPrimary}/>
                     </TouchableOpacity>
                 </View>
             </View>

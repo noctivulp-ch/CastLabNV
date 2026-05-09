@@ -22,6 +22,7 @@ import {initTranslate} from '../localization/translate';
 import {useDispatch} from 'react-redux';
 import {useFocusEffect, useNavigation} from '@react-navigation/native';
 import {useSafeAreaInsets} from "react-native-safe-area-context";
+import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
 
 interface PlaylistsScreenProps {
     playerHeight?: number;
@@ -429,7 +430,7 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
 
                 {/* Create Playlist Dialog */}
                 <Portal>
-                    <Dialog
+                    <KeyboardAwareDialog
                         visible={createDialogVisible}
                         onDismiss={() => setCreateDialogVisible(false)}
                     >
@@ -454,7 +455,7 @@ const PlaylistsScreen = React.forwardRef<PlaylistsScreenRef, PlaylistsScreenProp
                                 {i18n.t('create')}
                             </Button>
                         </Dialog.Actions>
-                    </Dialog>
+                    </KeyboardAwareDialog>
                 </Portal>
 
                 {/* Delete Confirmation Dialog */}

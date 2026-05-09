@@ -25,6 +25,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {EventBus} from '../services/EventBus';
 import DraggableFlatList, {RenderItemParams, ScaleDecorator} from 'react-native-draggable-flatlist';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
+import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
 
 type RootStackParamList = {
     PlaylistEdit: {
@@ -658,7 +659,7 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
 
             {/* Edit Name Dialog */}
             <Portal>
-                <Dialog
+                <KeyboardAwareDialog
                     visible={editNameDialogVisible}
                     onDismiss={() => setEditNameDialogVisible(false)}
                 >
@@ -684,7 +685,7 @@ const PlaylistEditScreen: React.FC<PlaylistEditScreenProps> = ({onPlaylistSaved}
                             {i18n.t('save')}
                         </Button>
                     </Dialog.Actions>
-                </Dialog>
+                </KeyboardAwareDialog>
             </Portal>
 
             {/* Bulk Delete Confirmation Dialog */}

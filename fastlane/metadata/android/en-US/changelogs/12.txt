@@ -6,6 +6,7 @@ Added
 Fixed
 - FCast casting not working on some receivers (missing metadata type)
 - DLNA 404 with special characters in filenames
+- Dialogs hidden by keyboard on some devices
 
 Improved
 - Real error messages on media file copy failures
