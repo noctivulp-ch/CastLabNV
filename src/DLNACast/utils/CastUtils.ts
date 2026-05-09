@@ -48,6 +48,14 @@ export class CastUtils {
     }
 
     /**
+     * Returns the first matching extension for a MIME type, or empty string.
+     */
+    static getExtensionFromMimeType(mimeType: string): string {
+        const entry = Object.entries(SUPPORTED_MEDIA_EXTENSIONS).find(([, mime]) => mime === mimeType);
+        return entry ? entry[0] : '';
+    }
+
+    /**
      * Checks if a file extension is a supported castable media format.
      */
     static isSupportedExtension(filename: string): boolean {

@@ -20,6 +20,7 @@ import {SERVER_PORT} from "../constants/Values";
 import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-server";
 import * as Network from "expo-network";
 import {copyFile, downloadFile, exists} from "@dr.pogodin/react-native-fs";
+import {LogService} from "../services/LogService";
 import {useMigrations} from "drizzle-orm/expo-sqlite/migrator";
 import migrations from "../../drizzle/migrations";
 import * as SQLite from "expo-sqlite";
@@ -168,10 +169,15 @@ const MainContent: React.FC = () => {
             if (cast?.currentAsset) {
                 let uri;
                 const asset: Asset = cast.currentAsset;
-                const album_id = asset?.albumId?.replace("\"", "").replace("'", "").replace("-", "");
+                const albumId = asset?.albumId?.replace(/["'\-]/g, "") || "";
 
-                // Include album ID if a file has the same name in a different album
-                const serverFileName = encodeURIComponent((album_id && album_id.length > 0 ? album_id + "_" : "") + asset.filename.replace("\"", "").replace("'", ""));
+                // Sanitize filename: keep only ASCII alphanumeric + underscore, append asset ID for uniqueness
+                const rawExt = asset.filename.includes('.') ? asset.filename.split('.').pop()?.toLowerCase() || '' : '';
+                const cleanExt = rawExt ? rawExt.replace(/[^a-zA-Z0-9]/g, '') : '';
+                const ext = cleanExt ? '.' + cleanExt : '';
+                const baseName = asset.filename.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_');
+                const safeId = asset.id.replace(/[^a-zA-Z0-9]/g, '');
+                const serverFileName = (albumId.length > 0 ? albumId + "_" : "") + baseName + "_" + safeId + ext;
                 const fileDir = resolveAssetsPath("webroot");
 
                 // Check if the file was not previously copied to fileDir
@@ -179,8 +185,9 @@ const MainContent: React.FC = () => {
                     try {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
-                        // Show error toast for file copy failures
-                        showErrorToast(i18n.t('failed_to_prepare_media_file'), i18n.t('check_storage_permissions_and_try_again'));
+                        const msg = (error as Error).message || String(error);
+                        LogService.error('Cast', `copyFile failed: ${msg} (uri=${asset.uri})`);
+                        showErrorToast(i18n.t('failed_to_prepare_media_file'), msg);
                         return;
                     }
                 }
@@ -442,9 +449,16 @@ const MainContent: React.FC = () => {
                     mediaType = 'audio';
                 }
 
+                // Append extension from mimeType if the filename has none
+                let filename = file.name;
+                if (!filename.includes('.') && file.mimeType) {
+                    const fallbackExt = CastUtils.getExtensionFromMimeType(file.mimeType);
+                    if (fallbackExt) filename = filename + '.' + fallbackExt;
+                }
+
                 return {
                     id: `file-${Date.now()}-${file.name}`,
-                    filename: file.name,
+                    filename,
                     uri: file.uri,
                     mediaType,
                     width: 0,
