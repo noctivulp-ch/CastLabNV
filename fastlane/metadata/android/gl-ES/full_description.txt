@@ -1,0 +1,17 @@
+Desfruta das túas fotos, música e vídeo nos dispositivos DLNA/UPnP e FCast da túa rede local.
+
+Características:
+
+- Enviar o multimedia desde a galería, xestor de ficheiros ou desde internet a calquera receptor DLNA/UPnP ou FCast
+- Descubrimento automático de dispositivos (SSDP e mDNS)
+- Compartir a pantalla do dispositivo Android en tempo real
+- Buscar multimedia nos álbums por rangos de data e tipo de multimedia
+- Crear e xestionar listas de reprodución
+- Control da reprodución: reproducir, pausar, deter, buscar, volume, reprodución automática
+- Reprodución en segundo plano con control das notificacións (reproducir/pausar/deter)
+- Extraer e enviar vídeos desde páxinas web (xestión HTML)
+- Enviar desde PeerTube e YouTube desde instancias Invidious (non desde YouTube directamente)
+- Importar listas de reprodución M3U/M3U8 (IPTV, fluxos de internet)
+- Abrir ficheiros directamente desde o selector de ficheiros
+- Decorados Claro, Escuro, Auto e Persoal con 8 controis
+- Material Design 3
