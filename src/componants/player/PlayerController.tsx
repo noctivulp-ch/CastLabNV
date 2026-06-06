@@ -45,6 +45,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     const dispatch = useDispatch();
     const cast = useSelector((state: IRootState) => state.cast);
     const {castManager, progress, playbackState, setProgress} = useCastManager();
+    const isFCast = connectedDevice?.protocol === 'fcast';
 
     // Local state
     const [asset, setAsset] = React.useState<Asset | null>(null);
@@ -206,10 +207,11 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     }, [cast.autoplay.enabled, cast.autoplay.delaySeconds, cast.currentAsset, clearAutoplayTimer, advanceToNext, isImageMedia]);
 
     /**
-     * Handle media end detection for videos/audio
+     * Handle media end detection for videos/audio via position polling
      */
     const checkForMediaEnd = useCallback(() => {
-        if (!cast.autoplay.enabled ||
+        if (isFCast ||
+            !cast.autoplay.enabled ||
             !cast.autoplay.onMediaEnd ||
             !cast.currentAsset ||
             !supportsPlayPause(cast.currentAsset) ||

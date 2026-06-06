@@ -4,6 +4,7 @@ import {Asset} from 'expo-media-library';
 import {IRootState} from '../screens/Main';
 import {nextAsset} from '../store/slice/castSlice';
 import {useCastManager} from '../contexts/castManager-context';
+import {LogService} from '../services/LogService';
 
 export interface UseAutoplayProps {
     /**
@@ -20,7 +21,8 @@ export interface UseAutoplayProps {
 export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = {}) => {
     const dispatch = useDispatch();
     const cast = useSelector((state: IRootState) => state.cast);
-    const {playbackState} = useCastManager();
+    const {playbackState, mediaItemEndCount, connectedDevice} = useCastManager();
+    const isFCast = connectedDevice?.protocol === 'fcast';
 
     // Refs to store timer and prevent stale closures
     const autoplayTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -123,10 +125,11 @@ export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = 
     }, [cast.autoplay.enabled, cast.autoplay.delaySeconds, cast.currentAsset, clearAutoplayTimer, advanceToNext, isImageMedia]);
 
     /**
-     * Handle media end detection for video/audio
+     * Handle media end detection for video/audio via position polling
      */
     const checkMediaEnd = useCallback(() => {
-        if (!cast.autoplay.enabled ||
+        if (isFCast ||
+            !cast.autoplay.enabled ||
             !cast.autoplay.onMediaEnd ||
             !cast.currentAsset ||
             !isTimedMedia(cast.currentAsset) ||
@@ -134,7 +137,6 @@ export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = 
             return;
         }
 
-        // Use position from playbackState (your interface uses 'position' not 'progress')
         const currentPosition = playbackState.position || 0;
         const duration = playbackState.duration || 0;
         const isPlaying = playbackState.isPlaying || false;
@@ -190,6 +192,22 @@ export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = 
             startImageAutoplay();
         }
     }, [cast.autoplay.delaySeconds, cast.currentAsset, startImageAutoplay, isImageMedia]);
+
+    /**
+     * FCast: advance on MediaItemEnd event from the receiver
+     */
+    useEffect(() => {
+        if (!isFCast ||
+            !cast.autoplay.enabled ||
+            !cast.autoplay.onMediaEnd ||
+            !cast.currentAsset ||
+            !isTimedMedia(cast.currentAsset) ||
+            mediaItemEndCount === 0) {
+            return;
+        }
+        LogService.info('Autoplay', 'Advancing to next via FCast MediaItemEnd');
+        advanceToNext();
+    }, [mediaItemEndCount]);
 
     /**
      * Cleanup on unmount

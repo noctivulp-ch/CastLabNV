@@ -24,6 +24,7 @@ interface CastState {
     isSearching: boolean;
     castingStarted: boolean;
     currentMediaInfo: MediaInfo | null;
+    mediaItemEndCount: number;
 }
 
 // Action types
@@ -41,7 +42,8 @@ type CastAction =
     | { type: 'CASTING_STARTED' }
     | { type: 'CASTING_STOPPED' }
     | { type: 'MEDIA_CAST'; mediaInfo: MediaInfo }
-    | { type: 'DEVICE_REMOVED'; device: Device };
+    | { type: 'DEVICE_REMOVED'; device: Device }
+    | { type: 'MEDIA_ITEM_END' };
 
 // Initial state
 const initialState: CastState = {
@@ -60,6 +62,7 @@ const initialState: CastState = {
     isSearching: false,
     castingStarted: false,
     currentMediaInfo: null,
+    mediaItemEndCount: 0,
 };
 
 // Reducer function
@@ -166,6 +169,12 @@ const castReducer = (state: CastState, action: CastAction): CastState => {
                 currentMediaInfo: action.mediaInfo,
             };
 
+        case 'MEDIA_ITEM_END':
+            return {
+                ...state,
+                mediaItemEndCount: state.mediaItemEndCount + 1,
+            };
+
         default:
             return state;
     }
@@ -184,6 +193,7 @@ interface CastManagerContextProps {
     playbackState: PlaybackState;
     currentMediaInfo: MediaInfo | null;
     isExternalDisplay: boolean;
+    mediaItemEndCount: number;
 
     // Actions
     castManager: CastManager;
@@ -278,6 +288,10 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         dispatch({type: 'MEDIA_CAST', mediaInfo});
     };
 
+    const onMediaItemEnd = () => {
+        dispatch({type: 'MEDIA_ITEM_END'});
+    };
+
     // Helper functions
     const clearError = () => {
         dispatch({type: 'CLEAR_ERROR'});
@@ -306,6 +320,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
             'deviceCapabilityUpdated': onDeviceCapabilityUpdated,
             'mediaCleared': onMediaCleared,
             'mediaCast': onMediaCast,
+            'mediaItemEnd': onMediaItemEnd,
         };
 
         // Add all listeners
@@ -340,6 +355,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         playbackState: state.playbackState,
         currentMediaInfo: state.currentMediaInfo,
         isExternalDisplay: state.connectedDevice?.protocol === 'external-display',
+        mediaItemEndCount: state.mediaItemEndCount,
 
         // Actions
         castManager,

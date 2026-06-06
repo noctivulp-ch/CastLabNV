@@ -364,6 +364,10 @@ export class CastManager extends EventEmitter {
                     // Volume update handled via playbackUpdate
                 });
 
+                this.fcastClient.on('mediaItemEnd', () => {
+                    this.emit('mediaItemEnd');
+                });
+
                 this.fcastClient.on('error', (message: string) => {
                     this.emit('error', message);
                 });
