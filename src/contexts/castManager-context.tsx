@@ -194,6 +194,7 @@ interface CastManagerContextProps {
     currentMediaInfo: MediaInfo | null;
     isExternalDisplay: boolean;
     mediaItemEndCount: number;
+    hasMediaItemEndSupport: boolean;
 
     // Actions
     castManager: CastManager;
@@ -356,6 +357,7 @@ const CastManagerContextProvider = ({children}: ContextProviderProps) => {
         currentMediaInfo: state.currentMediaInfo,
         isExternalDisplay: state.connectedDevice?.protocol === 'external-display',
         mediaItemEndCount: state.mediaItemEndCount,
+        hasMediaItemEndSupport: castManager.hasMediaItemEndSupport(),
 
         // Actions
         castManager,

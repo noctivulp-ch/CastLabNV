@@ -302,9 +302,12 @@ export class FCastClient extends EventEmitter {
                 break;
             case FCastOpcode.Initial:
                 LogService.info('FCast', `Initial state: ${JSON.stringify(body)}`);
+                this.supportsMediaItemEnd = Array.isArray(body?.supportedEventTypes) &&
+                    body.supportedEventTypes.includes(FCastEventType.MediaItemEnd);
                 if (body?.playData) {
                     this.handlePlaybackUpdate(body.playData as FCastPlaybackUpdate);
                 }
+                this.subscribeMediaItemEnd();
                 break;
             case FCastOpcode.PlaybackError:
                 LogService.error('FCast', `Playback error: ${body?.message || JSON.stringify(body)}`);
@@ -345,9 +348,16 @@ export class FCastClient extends EventEmitter {
         }
     }
 
+    supportsMediaItemEnd = false;
+
     private sendVersionHandshake(): void {
         this.sendPacket(FCastOpcode.Version, {version: 3});
+    }
+
+    private subscribeMediaItemEnd(): void {
+        if (!this.supportsMediaItemEnd) return;
         this.sendPacket(FCastOpcode.SubscribeEvent, {eventType: FCastEventType.MediaItemEnd});
+        LogService.info('FCast', 'Subscribed to MediaItemEnd events');
     }
 
     private handleConnectionLost(reason: string): void {

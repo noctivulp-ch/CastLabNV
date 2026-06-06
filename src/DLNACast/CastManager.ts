@@ -82,6 +82,10 @@ export class CastManager extends EventEmitter {
         return this.currentDevice !== null;
     }
 
+    hasMediaItemEndSupport(): boolean {
+        return this.fcastClient?.supportsMediaItemEnd ?? false;
+    }
+
     /**
      * Gets the currently connected device.
      * @returns The connected device or null.

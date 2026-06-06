@@ -44,8 +44,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
     const i18n = initTranslate();
     const dispatch = useDispatch();
     const cast = useSelector((state: IRootState) => state.cast);
-    const {castManager, progress, playbackState, setProgress} = useCastManager();
-    const isFCast = connectedDevice?.protocol === 'fcast';
+    const {castManager, progress, playbackState, setProgress, hasMediaItemEndSupport, mediaItemEndCount} = useCastManager();
 
     // Local state
     const [asset, setAsset] = React.useState<Asset | null>(null);
@@ -210,8 +209,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
      * Handle media end detection for videos/audio via position polling
      */
     const checkForMediaEnd = useCallback(() => {
-        if (isFCast ||
-            !cast.autoplay.enabled ||
+        if (hasMediaItemEndSupport ||
             !cast.autoplay.onMediaEnd ||
             !cast.currentAsset ||
             !supportsPlayPause(cast.currentAsset) ||
@@ -224,22 +222,17 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
         const duration = playbackState.duration || 0;
         const isPlaying = playbackState.isPlaying || false;
 
-        // Check if media is near end
-        const isNearEnd = duration > 0 && currentPosition >= duration - 3;
-        const positionStuck = Math.abs(currentPosition - lastProgressRef.current) < 0.1 && currentPosition > 0;
-        const hasEnded = isNearEnd && (positionStuck || !isPlaying);
-
-        if (hasEnded) {
+        const remaining = duration - currentPosition;
+        if (duration > 0 && remaining < 3 && remaining > 0 && isPlaying) {
             setMediaEndDetected(true);
-
-            // Advance to next with slight delay
+            const delay = (remaining + 1) * 1000;
             setTimeout(() => {
                 advanceToNext();
-            }, 1500);
+            }, delay);
         }
 
         lastProgressRef.current = currentPosition;
-    }, [cast.autoplay.enabled, cast.autoplay.onMediaEnd, cast.currentAsset, supportsPlayPause, playbackState, mediaEndDetected, advanceToNext]);
+    }, [cast.autoplay.enabled, cast.autoplay.onMediaEnd, cast.currentAsset, supportsPlayPause, playbackState, mediaEndDetected, advanceToNext, hasMediaItemEndSupport]);
 
     /**
      * Handle navigation to previous asset
@@ -328,6 +321,18 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
             checkForMediaEnd();
         }
     }, [playbackState?.position, playbackState?.isPlaying, checkForMediaEnd]);
+
+    // Advance on MediaItemEnd event from receivers that support it
+    useEffect(() => {
+        if (!hasMediaItemEndSupport ||
+            !cast.autoplay.onMediaEnd ||
+            !cast.currentAsset ||
+            !supportsPlayPause(cast.currentAsset) ||
+            mediaItemEndCount === 0) {
+            return;
+        }
+        advanceToNext();
+    }, [mediaItemEndCount]);
 
     // Listen for cast manager events
     useEffect(() => {
