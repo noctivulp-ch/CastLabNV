@@ -7,6 +7,7 @@ import {PresetTheme, THEME_PRESETS} from '../theme/presets';
 import {initTranslate} from '../localization/translate';
 import lightColors from '../theme/light.json';
 import darkColors from '../theme/dark.json';
+import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
 
 interface ColorItemProps {
     label: string;
@@ -300,7 +301,7 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
 
             {/* Color Picker Dialog */}
             <Portal>
-                <Dialog visible={pickerVisible} onDismiss={() => setPickerVisible(false)}>
+                <KeyboardAwareDialog visible={pickerVisible} onDismiss={() => setPickerVisible(false)}>
                     <Dialog.Title>
                         {i18n.t('select_color_for')} {currentColorKey}
                     </Dialog.Title>
@@ -331,7 +332,7 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
                         <Button onPress={() => setPickerVisible(false)}>{i18n.t('cancel')}</Button>
                         <Button onPress={saveColor}>{i18n.t('save')}</Button>
                     </Dialog.Actions>
-                </Dialog>
+                </KeyboardAwareDialog>
             </Portal>
 
             {/* Reset Confirmation Dialog */}

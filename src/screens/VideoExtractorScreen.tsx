@@ -21,6 +21,7 @@ import {ExtractedVideoWithHistory, VideoHistoryService} from '../../db/Extracted
 import {useCastManager} from '../contexts/castManager-context';
 import {useDispatch} from 'react-redux';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
 
 interface VideoExtractorScreenProps {
     playerHeight?: number;
@@ -768,7 +769,7 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
 
             {/* Settings Dialog */}
             <Portal>
-                <Dialog visible={settingsVisible} onDismiss={() => setSettingsVisible(false)}>
+                <KeyboardAwareDialog visible={settingsVisible} onDismiss={() => setSettingsVisible(false)}>
                     <Dialog.Title>{i18n.t('video_extractor_settings')}</Dialog.Title>
                     <Dialog.Content>
                         <Text variant="bodyMedium" style={{marginBottom: 8}}>
@@ -823,7 +824,7 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                             {i18n.t('save')}
                         </Button>
                     </Dialog.Actions>
-                </Dialog>
+                </KeyboardAwareDialog>
             </Portal>
 
             {/* Delete confirmation dialog */}

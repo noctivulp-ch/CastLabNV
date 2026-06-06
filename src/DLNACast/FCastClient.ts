@@ -29,6 +29,17 @@ enum FCastOpcode {
     Initial = 14,
     PlayUpdate = 15,
     SetPlaylistItem = 16,
+    SubscribeEvent = 17,
+    UnsubscribeEvent = 18,
+    Event = 19,
+}
+
+enum FCastEventType {
+    MediaItemStart = 0,
+    MediaItemEnd = 1,
+    MediaItemChange = 2,
+    KeyDown = 3,
+    KeyUp = 4,
 }
 
 enum FCastPlaybackState {
@@ -301,6 +312,9 @@ export class FCastClient extends EventEmitter {
                 break;
             case FCastOpcode.PlayUpdate:
                 break;
+            case FCastOpcode.Event:
+                this.handleEvent(body);
+                break;
             default:
                 LogService.info('FCast', `Unknown opcode: ${opcode}`);
         }
@@ -323,8 +337,17 @@ export class FCastClient extends EventEmitter {
         this.emit('volumeUpdate', update.volume);
     }
 
+    private handleEvent(body: any): void {
+        if (!body) return;
+        if (body.eventType === FCastEventType.MediaItemEnd) {
+            LogService.info('FCast', 'MediaItemEnd event received');
+            this.emit('mediaItemEnd');
+        }
+    }
+
     private sendVersionHandshake(): void {
         this.sendPacket(FCastOpcode.Version, {version: 3});
+        this.sendPacket(FCastOpcode.SubscribeEvent, {eventType: FCastEventType.MediaItemEnd});
     }
 
     private handleConnectionLost(reason: string): void {
