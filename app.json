@@ -2,12 +2,12 @@
   "expo": {
     "name": "CastLab",
     "slug": "CastLab",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "buildNumber": "1.4.0",
+      "buildNumber": "1.5.0",
       "supportsTablet": true,
       "bundleIdentifier": "app.fedilab.castlab",
       "infoPlist": {
@@ -23,7 +23,7 @@
       }
     },
     "android": {
-      "versionCode": 13,
+      "versionCode": 14,
       "blockedPermissions": [],
       "adaptiveIcon": {
         "backgroundColor": "#000000",

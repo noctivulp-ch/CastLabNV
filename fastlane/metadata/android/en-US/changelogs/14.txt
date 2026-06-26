@@ -1,0 +1,5 @@
+Added
+- Playback controls and seek bar in the casting notification and lock screen
+
+Fixed
+- Casting no longer stops when the app goes to the background
