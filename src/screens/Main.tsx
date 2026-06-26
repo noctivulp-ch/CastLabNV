@@ -502,7 +502,7 @@ const MainContent: React.FC = () => {
         setThemeDialogVisible(true);
     }
 
-    // Keep device awake when connected for autoplay functionality
+    // Keep the screen awake when connected for autoplay functionality
     useEffect(() => {
         if (connectedDevice) {
             activateKeepAwakeAsync();

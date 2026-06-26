@@ -528,10 +528,11 @@ export class CastManager extends EventEmitter {
         this.currentMediaInfo = mediaInfo;
         this.currentMediaUri = mediaInfo.contentUrl;
 
+        this.emit('mediaCast', mediaInfo);
+
         try {
             if (this.isExternalDisplayDevice()) {
                 LogService.info('ExternalDisplay', `Casting: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
-                this.emit('mediaCast', mediaInfo);
                 this.emit('progressChanged', 0);
                 this.emit('castingStarted');
             } else if (this.isFCastDevice() && this.fcastClient) {
@@ -1585,6 +1586,23 @@ ${body}
 
         // Start first poll immediately
         poll();
+    }
+
+    /**
+     * Suspends DLNA polling and heartbeat while backgrounded, resumes on foreground.
+     * Avoids futile SOAP timeouts and a reachability blip disconnecting the cast.
+     */
+    setBackgroundMode(isBackground: boolean): void {
+        if (isBackground) {
+            this.stopPolling();
+            this.stopHeartbeat();
+        } else if (this.currentDevice?.protocol === 'dlna') {
+            this.startPolling();
+            if (this.currentMediaUri) {
+                this.startHeartbeat();
+            }
+            this.forceStatusUpdate();
+        }
     }
 
     /**

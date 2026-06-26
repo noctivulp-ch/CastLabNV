@@ -90,6 +90,7 @@
       "expo-sqlite",
       "expo-localization",
       "./modules/expo-screen-share/app.plugin.js",
+      "./modules/expo-media-foreground/app.plugin.js",
       "expo-video"
     ],
     "extra": {

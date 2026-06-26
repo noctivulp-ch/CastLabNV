@@ -1,230 +1,159 @@
-import {useEffect, useRef} from 'react';
-import {AppState, AppStateStatus} from 'react-native';
+import {useCallback, useEffect, useRef, useState} from 'react';
+import {AppState} from 'react-native';
+import {useDispatch} from 'react-redux';
 import * as Notifications from 'expo-notifications';
-import {NotificationService} from '../services/NotificationService';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import {useCastManager} from '../contexts/castManager-context';
+import {initTranslate} from '../localization/translate';
+import {LogService} from '../services/LogService';
+import {nextAsset, previousAsset} from '../store/slice/castSlice';
+import * as MediaForeground from '../../modules/expo-media-foreground/src';
+import {ForegroundContent} from '../../modules/expo-media-foreground/src';
 
 /**
- * Custom hook to handle background notifications for casting
+ * Drives the casting foreground service notification and keeps the process alive
+ * while connected so the media HTTP server keeps serving in the background.
  */
 export const useBackgroundNotification = () => {
-    const {connectedDevice, playbackState, castingStarted, castManager} = useCastManager();
-    const notificationService = useRef(NotificationService.getInstance());
-    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-    const hasShownNotification = useRef<boolean>(false);
-    const lastPlaybackState = useRef<boolean | null>(null);
-    const lastPosition = useRef<number>(0);
+    const {connectedDevice, playbackState, currentMediaInfo, castManager} = useCastManager();
+    const dispatch = useDispatch();
+    const i18n = initTranslate();
 
-    // Single subscription refs for cleanup
-    const notificationResponseRef = useRef<Notifications.EventSubscription | null>(null);
+    const mediaTitle = currentMediaInfo?.metadata?.title;
+    const contentUrl = currentMediaInfo?.contentUrl;
+    const contentType = currentMediaInfo?.contentType ?? '';
+    const isPlaying = playbackState?.isPlaying ?? false;
+    const [artworkUri, setArtworkUri] = useState<string | undefined>(undefined);
 
-    /**
-     * Initialize notification service and set up listeners
-     */
+    // Latest position/duration in seconds, read fresh when building the notification
+    const positionRef = useRef(0);
+    const durationRef = useRef(0);
+    positionRef.current = playbackState?.position ?? 0;
+    durationRef.current = playbackState?.duration ?? 0;
+
+    const buildContent = useCallback((): ForegroundContent => {
+        // Show controls as soon as a media is cast, even if the Play SOAP is slow to confirm
+        const hasMedia = !!mediaTitle;
+        return {
+            title: connectedDevice ? `CastLab - ${connectedDevice.name}` : 'CastLab',
+            text: hasMedia
+                ? mediaTitle!
+                : connectedDevice
+                    ? i18n.t('connected_to_device', {deviceName: connectedDevice.name})
+                    : '',
+            isPlaying,
+            showControls: hasMedia,
+            playLabel: i18n.t('play'),
+            pauseLabel: i18n.t('pause'),
+            stopLabel: i18n.t('stop'),
+            prevLabel: i18n.t('previous'),
+            nextLabel: i18n.t('next'),
+            positionMs: Math.round(positionRef.current * 1000),
+            durationMs: Math.round(durationRef.current * 1000),
+            artworkUri,
+        };
+    }, [connectedDevice, mediaTitle, isPlaying, artworkUri]);
+
+    // Request notification permission so the foreground notification is visible on Android 13+
     useEffect(() => {
-        let isMounted = true;
+        Notifications.requestPermissionsAsync().catch(() => {});
+    }, []);
 
-        const initializeNotifications = async () => {
-            if (isMounted) {
-                await notificationService.current.initialize();
-                // Setup both categories at startup
-                await notificationService.current.setupNotificationCategories(true);  // Playing
-                await notificationService.current.setupNotificationCategories(false); // Paused
+    // Resolve a thumbnail: photo uses its image, video uses metadata or a generated frame
+    useEffect(() => {
+        let cancelled = false;
+
+        const resolveArtwork = async (): Promise<string | undefined> => {
+            if (!contentUrl) return undefined;
+            if (contentType.startsWith('image/')) return contentUrl;
+
+            const metaImage = currentMediaInfo?.metadata?.images?.[0]?.url;
+            if (metaImage && metaImage !== contentUrl) return metaImage;
+
+            if (contentType.startsWith('video/')) {
+                try {
+                    const {uri} = await VideoThumbnails.getThumbnailAsync(contentUrl, {time: 1000});
+                    return uri;
+                } catch (error) {
+                    LogService.warn('Foreground', `thumbnail failed: ${error}`);
+                }
             }
+            return undefined;
         };
 
-        // Initialize immediately
-        initializeNotifications();
-
-        // App state change handler
-        const handleAppStateChangeLocal = async (nextAppState: AppStateStatus) => {
-            const isGoingToBackground = appStateRef.current === 'active' && nextAppState.match(/inactive|background/);
-            const isComingToForeground = appStateRef.current.match(/inactive|background/) && nextAppState === 'active';
-
-            appStateRef.current = nextAppState;
-
-            if (isGoingToBackground) {
-                if (connectedDevice && castingStarted) {
-                    const mediaTitle = castManager.getCurrentMediaTitle() || 'Media';
-                    await notificationService.current.showCastingNotification(
-                        connectedDevice,
-                        mediaTitle,
-                        playbackState
-                    );
-                    hasShownNotification.current = true;
-                    lastPlaybackState.current = playbackState?.isPlaying || false;
-                }
-
-            } else if (isComingToForeground) {
-                await notificationService.current.hideCastingNotification();
-                hasShownNotification.current = false;
-            }
-        };
-
-        const appStateSubscription = AppState.addEventListener('change', handleAppStateChangeLocal);
-
-        // Single notification response listener that handles ALL interactions
-        notificationResponseRef.current = Notifications.addNotificationResponseReceivedListener(async response => {
-            const notificationData = response.notification.request.content.data || {};
-            const actionIdentifier = response.actionIdentifier;
-
-            // Handle different actions
-            if (actionIdentifier === 'PLAY') {
-                try {
-                    await castManager.play();
-
-                    // Immediately update notification with correct state since play() is non-blocking
-                    if (hasShownNotification.current && connectedDevice) {
-                        const mediaTitle = castManager.getCurrentMediaTitle() || 'Media';
-                        const updatedPlaybackState = playbackState ?
-                            {...playbackState, isPlaying: true} :
-                            {position: 0, duration: 1000, isPlaying: true, volume: 0.5, muted: false};
-
-                        await notificationService.current.showCastingNotification(
-                            connectedDevice,
-                            mediaTitle,
-                            updatedPlaybackState
-                        );
-                        lastPlaybackState.current = true;
-                    }
-                } catch (error) {
-                    console.error('Error in play action:', error);
-                }
-
-            } else if (actionIdentifier === 'PAUSE') {
-                try {
-                    await castManager.pause();
-
-                    // Immediately update notification with correct state since pause() is non-blocking
-                    if (hasShownNotification.current && connectedDevice) {
-                        const mediaTitle = castManager.getCurrentMediaTitle() || 'Media';
-                        const updatedPlaybackState = playbackState ?
-                            {...playbackState, isPlaying: false} :
-                            {position: 0, duration: 1000, isPlaying: false, volume: 0.5, muted: false};
-
-                        await notificationService.current.showCastingNotification(
-                            connectedDevice,
-                            mediaTitle,
-                            updatedPlaybackState
-                        );
-                        lastPlaybackState.current = false;
-                    }
-                } catch (error) {
-                    console.error('Error in pause action:', error);
-                }
-
-            } else if (actionIdentifier === 'STOP') {
-                try {
-                    // Use non-blocking approach like play/pause
-                    await castManager.stop();
-
-                    // Immediately hide notification since media is stopped
-                    if (hasShownNotification.current) {
-                        await notificationService.current.hideCastingNotification();
-                        hasShownNotification.current = false;
-                        lastPlaybackState.current = null;
-                    }
-                } catch (error) {
-                    console.error('Error in stop action:', error);
-                }
-
-            }
+        if (!connectedDevice || !contentUrl) {
+            setArtworkUri(undefined);
+            return;
+        }
+        resolveArtwork().then((uri) => {
+            if (!cancelled) setArtworkUri(uri);
         });
 
         return () => {
-            isMounted = false;
-            appStateSubscription?.remove();
-            if (notificationResponseRef.current) {
-                notificationResponseRef.current.remove();
-                notificationResponseRef.current = null;
-            }
+            cancelled = true;
         };
-    }, [connectedDevice, castingStarted, castManager, playbackState]);
+    }, [contentUrl, contentType, connectedDevice]);
 
-    /**
-     * Handle device disconnection and casting stopped
-     */
+    // Start/stop the foreground service with the connection
     useEffect(() => {
-        if (!connectedDevice) {
-            notificationService.current.hideCastingNotification();
-            hasShownNotification.current = false;
-            lastPlaybackState.current = null;
+        if (connectedDevice) {
+            MediaForeground.startMediaForeground(buildContent())
+                .catch((err) => LogService.warn('Foreground', `start failed: ${err}`));
+        } else {
+            MediaForeground.stopMediaForeground().catch(() => {});
         }
     }, [connectedDevice]);
 
-    /**
-     * Handle casting stopped (media cleared but device still connected)
-     */
+    // Update the notification when media, playback state or artwork changes
     useEffect(() => {
-        const handleCastingStopped = () => {
-            notificationService.current.hideCastingNotification();
-            hasShownNotification.current = false;
-            lastPlaybackState.current = null;
-        };
+        if (connectedDevice) {
+            MediaForeground.updateMediaForeground(buildContent())
+                .catch((err) => LogService.warn('Foreground', `update failed: ${err}`));
+        }
+    }, [connectedDevice, mediaTitle, isPlaying, artworkUri]);
 
-        castManager.on('castingStopped', handleCastingStopped);
+    // Refresh the seek bar baseline while playing in the foreground. The system
+    // extrapolates the position between updates from the playback state.
+    useEffect(() => {
+        if (!connectedDevice || !mediaTitle || !isPlaying) return;
+        const id = setInterval(() => {
+            if (AppState.currentState !== 'active') return;
+            MediaForeground.updateMediaForeground(buildContent()).catch(() => {});
+        }, 3000);
+        return () => clearInterval(id);
+    }, [connectedDevice, mediaTitle, isPlaying, buildContent]);
 
-        return () => {
-            castManager.off('castingStopped', handleCastingStopped);
-        };
+    // Suspend DLNA polling while backgrounded to avoid futile SOAP timeouts and
+    // a reachability blip disconnecting the cast. Resume on foreground.
+    useEffect(() => {
+        const subscription = AppState.addEventListener('change', (state) => {
+            castManager.setBackgroundMode(state !== 'active');
+        });
+        return () => subscription.remove();
     }, [castManager]);
 
-    /**
-     * Update notification when playback state changes from polling
-     * This runs with a delay to avoid conflicts with manual actions
-     */
+    // Forward notification actions to the cast manager
     useEffect(() => {
-        const timeoutId = setTimeout(async () => {
-            const isInBackground = appStateRef.current.match(/inactive|background/);
-
-            if (isInBackground && hasShownNotification.current && connectedDevice && castingStarted && playbackState) {
-                // Update notification on state changes or position changes (every 5 seconds)
-                const stateChanged = lastPlaybackState.current !== playbackState.isPlaying;
-                const positionChanged = Math.abs((lastPosition.current || 0) - playbackState.position) >= 5;
-
-                if (stateChanged || positionChanged) {
-                    const mediaTitle = castManager.getCurrentMediaTitle() || 'Media';
-                    await notificationService.current.showCastingNotification(
-                        connectedDevice,
-                        mediaTitle,
-                        playbackState
-                    );
-
-                    lastPlaybackState.current = playbackState.isPlaying;
-                    lastPosition.current = playbackState.position;
+        const subscription = MediaForeground.addCastActionListener(async (action, positionMs) => {
+            try {
+                if (action === 'play') {
+                    await castManager.play();
+                } else if (action === 'pause') {
+                    await castManager.pause();
+                } else if (action === 'stop') {
+                    await castManager.stop();
+                } else if (action === 'next') {
+                    dispatch(nextAsset());
+                } else if (action === 'previous') {
+                    dispatch(previousAsset());
+                } else if (action === 'seek') {
+                    await castManager.seek(Math.round(positionMs / 1000));
                 }
+            } catch (error) {
+                LogService.warn('Foreground', `action ${action} failed: ${error}`);
             }
-        }, 500); // Delay to let optimistic updates complete
+        });
 
-        return () => clearTimeout(timeoutId);
-    }, [playbackState?.isPlaying, playbackState?.position, connectedDevice, castingStarted, castManager]);
-
-    /**
-     * Cleanup on unmount
-     */
-    useEffect(() => {
-        return () => {
-            notificationService.current.cleanup();
-            if (notificationResponseRef.current) {
-                notificationResponseRef.current.remove();
-            }
-        };
-    }, []);
-
-    return {
-        showNotification: async (mediaTitle?: string) => {
-            if (connectedDevice && appStateRef.current.match(/inactive|background/) && !hasShownNotification.current) {
-                await notificationService.current.showCastingNotification(
-                    connectedDevice,
-                    mediaTitle || castManager.getCurrentMediaTitle() || 'Media',
-                    playbackState
-                );
-                hasShownNotification.current = true;
-            }
-        },
-        hideNotification: async () => {
-            await notificationService.current.hideCastingNotification();
-            hasShownNotification.current = false;
-        },
-    };
+        return () => subscription.remove();
+    }, [castManager, dispatch]);
 };
