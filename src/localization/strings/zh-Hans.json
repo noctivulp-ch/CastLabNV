@@ -250,5 +250,7 @@
     },
     "screen_share_started": "屏幕共享已开始",
     "screen_share_stopped": "屏幕共享已停止",
-    "screen_share_failed": "屏幕共享失败"
+    "screen_share_failed": "屏幕共享失败",
+    "previous": "上一个",
+    "next": "下一个"
 }
