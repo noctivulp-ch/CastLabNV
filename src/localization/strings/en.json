@@ -163,6 +163,7 @@
   "loading_albums_from_media_library": "Loading albums from media library",
   "retry": "Retry",
   "failed_to_prepare_media_file": "Failed to prepare media file",
+  "not_enough_storage": "Not enough free space on the device",
   "check_storage_permissions_and_try_again": "Check storage permissions and try again",
   "failed_to_cast_media": "Failed to cast media",
   "unknown_error": "Unknown error",

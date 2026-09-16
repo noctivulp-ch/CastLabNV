@@ -4,7 +4,7 @@ import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} fr
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
 import {combineReducers, configureStore} from "@reduxjs/toolkit";
-import {Appearance, GestureResponderEvent, Platform} from "react-native";
+import {Appearance, AppState, GestureResponderEvent, Platform} from "react-native";
 import {SETTINGS_THEME} from "../constants/AsyncStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {StatusBar} from "expo-status-bar";
@@ -21,6 +21,7 @@ import StaticServer, {resolveAssetsPath} from "@dr.pogodin/react-native-static-s
 import * as Network from "expo-network";
 import {copyFile, downloadFile, exists} from "@dr.pogodin/react-native-fs";
 import {LogService} from "../services/LogService";
+import {WebrootService} from "../services/WebrootService";
 import {useMigrations} from "drizzle-orm/expo-sqlite/migrator";
 import migrations from "../../drizzle/migrations";
 import * as SQLite from "expo-sqlite";
@@ -125,6 +126,9 @@ const MainContent: React.FC = () => {
     // Server management
     const serverRef = useRef<StaticServer | null>(null);
 
+    // Name of the media copy currently served, kept so it is never deleted
+    const activeServerFile = useRef<string | null>(null);
+
     // Toast helpers
     const showInfoToast = useCallback((text1: string, text2 = "") => {
         setToastType("info");
@@ -180,8 +184,25 @@ const MainContent: React.FC = () => {
                 const serverFileName = (albumId.length > 0 ? albumId + "_" : "") + baseName + "_" + safeId + ext;
                 const fileDir = resolveAssetsPath("webroot");
 
+                // Release the previously cast copy, it is no longer needed
+                const previousFileName = activeServerFile.current;
+                activeServerFile.current = serverFileName;
+                WebrootService.setActiveFile(serverFileName);
+                if (previousFileName && previousFileName !== serverFileName) {
+                    WebrootService.releaseFile(fileDir, previousFileName);
+                }
+
                 // Check if the file was not previously copied to fileDir
                 if (!await exists(fileDir + "/" + serverFileName)) {
+                    // Delete older copies and make sure the device can hold this one
+                    const sourceInfo = await FileSystem.getInfoAsync(asset.uri).catch(() => null);
+                    const sourceSize = sourceInfo?.exists ? sourceInfo.size : 0;
+                    if (!await WebrootService.ensureSpaceFor(fileDir, sourceSize)) {
+                        LogService.error('Cast', `Not enough free space to cast ${asset.filename}`);
+                        showErrorToast(i18n.t('failed_to_prepare_media_file'), i18n.t('not_enough_storage'));
+                        return;
+                    }
+
                     try {
                         await copyFile(asset.uri, fileDir + "/" + serverFileName);
                     } catch (error) {
@@ -487,6 +508,8 @@ const MainContent: React.FC = () => {
     const deleteFiles = async () => {
         const SERVER_FILE_DIRECTORY = `${FileSystem.documentDirectory}webroot/`;
         try {
+            activeServerFile.current = null;
+            WebrootService.reset();
             await FileSystem.deleteAsync(SERVER_FILE_DIRECTORY, {idempotent: true});
             await FileSystem.makeDirectoryAsync(SERVER_FILE_DIRECTORY, {intermediates: true});
         } catch (error) {
@@ -615,6 +638,29 @@ const MainContent: React.FC = () => {
                 await Promise.all(stopPromises);
             })();
         };
+    }, [connectedDevice]);
+
+    // Free disk space when casting stops or the app leaves the foreground
+    useEffect(() => {
+        const fileDir = resolveAssetsPath('webroot');
+
+        const deleteInactive = () => WebrootService.deleteInactive(fileDir)
+            .catch(error => LogService.warn('Cast', `Webroot cleanup failed: ${error.message}`));
+
+        if (!connectedDevice) {
+            activeServerFile.current = null;
+            WebrootService.reset();
+        }
+        deleteInactive();
+
+        const subscription = AppState.addEventListener('change', state => {
+            // Keep the active copy, the foreground service may still be casting it
+            if (state === 'background') {
+                deleteInactive();
+            }
+        });
+
+        return () => subscription.remove();
     }, [connectedDevice]);
 
     // App initialization effect
