@@ -3,6 +3,7 @@ package app.fedilab.castlab.screenshare
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 
@@ -46,6 +47,20 @@ class ScreenEncoder(
 
     fun setOutputCallback(callback: (ByteArray) -> Unit) {
         outputCallback = callback
+    }
+
+    /**
+     * Request a keyframe so a joining client can start decoding
+     */
+    fun requestKeyFrame() {
+        try {
+            val params = Bundle().apply {
+                putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+            }
+            codec?.setParameters(params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Keyframe request failed: ${e.message}")
+        }
     }
 
     fun start() {

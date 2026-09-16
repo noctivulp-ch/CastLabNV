@@ -96,6 +96,11 @@ class ScreenCaptureService : Service() {
             httpServer!!.pushData(tsPackets)
         }
 
+        // A joining client needs a keyframe before it can decode anything
+        httpServer!!.onClientConnected = {
+            encoder?.requestKeyFrame()
+        }
+
         // Create virtual display with encoder's input surface
         virtualDisplay = mediaProjection!!.createVirtualDisplay(
             "CastLabScreenShare",

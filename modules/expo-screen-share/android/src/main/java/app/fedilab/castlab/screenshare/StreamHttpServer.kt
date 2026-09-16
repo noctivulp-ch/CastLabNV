@@ -15,6 +15,9 @@ class StreamHttpServer(private val port: Int) {
     @Volatile
     private var running = false
 
+    // Lets the encoder emit a keyframe when a client joins
+    var onClientConnected: (() -> Unit)? = null
+
     fun start() {
         running = true
         Thread {
@@ -58,6 +61,7 @@ class StreamHttpServer(private val port: Int) {
 
                 clients.add(output)
                 Log.i(TAG, "Client connected, total: ${clients.size}")
+                onClientConnected?.invoke()
 
                 // Keep alive until closed
                 try {

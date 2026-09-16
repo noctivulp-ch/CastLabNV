@@ -11,13 +11,13 @@ const TAG = 'Webroot';
 // Served by the server itself, never deleted
 const PROTECTED_FILES = ['icon.png'];
 
-// Maximum total size of inactive copies kept for reuse, the file being cast is exempt
+// Applies to inactive copies, the file being cast is exempt
 const RETAINED_MAX_BYTES = 1024 * 1024 * 1024; // 1 GB
 
 // Free disk space preserved after copying the active file
 const FREE_SPACE_MARGIN = 512 * 1024 * 1024; // 512 MB
 
-// Delay before deleting a released file, lets in-flight range requests finish
+// Lets in-flight range requests finish
 const RELEASE_DELAY_MS = 10000; // 10 seconds
 
 export class WebrootService {
@@ -61,7 +61,7 @@ export class WebrootService {
     }
 
     /**
-     * Delete inactive copies to fit a new file, false when the device lacks the space
+     * Delete inactive copies to fit a new file, false when space is short
      */
     static async ensureSpaceFor(dir: string, requiredBytes: number): Promise<boolean> {
         await this.trimToLimit(dir);

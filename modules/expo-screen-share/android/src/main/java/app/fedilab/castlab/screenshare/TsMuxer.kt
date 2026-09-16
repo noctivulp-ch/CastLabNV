@@ -1,7 +1,6 @@
 package app.fedilab.castlab.screenshare
 
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 
 /**
  * Lightweight MPEG-TS muxer for a single H.264 video stream.
@@ -12,6 +11,7 @@ class TsMuxer {
     private var pmtCc = 0
     private var videoCc = 0
     private var configData: ByteArray? = null // SPS + PPS
+    private var firstPtsUs = -1L
 
     fun setConfigData(data: ByteArray) {
         configData = data
@@ -26,6 +26,12 @@ class TsMuxer {
     fun mux(nalData: ByteArray, pts: Long): ByteArray {
         val output = ByteArrayOutputStream()
 
+        // Rebase MediaCodec uptime timestamps so PTS fits in 33 bits
+        if (firstPtsUs < 0) firstPtsUs = pts
+        val elapsed90k = (pts - firstPtsUs) * 90 / 1000
+        val pcrBase = elapsed90k and MAX_33_BITS
+        val ptsTs = (elapsed90k + PCR_LEAD_90KHZ) and MAX_33_BITS
+
         // Insert PAT + PMT before each keyframe
         if (isKeyFrame(nalData)) {
             output.write(buildPat())
@@ -33,7 +39,7 @@ class TsMuxer {
         }
 
         // Build PES packet
-        val pesData = buildPes(nalData, pts)
+        val pesData = buildPes(nalData, ptsTs)
 
         // Split PES into 188-byte TS packets
         var offset = 0
@@ -47,35 +53,37 @@ class TsMuxer {
             packet[1] = (payloadUnitStart or (VIDEO_PID shr 8 and 0x1F)).toByte()
             packet[2] = (VIDEO_PID and 0xFF).toByte()
 
+            // Every access unit carries a PCR so the receiver can build its clock
+            val withPcr = first
+            val minAdapt = if (withPcr) PCR_ADAPT_SIZE else 0
             val remaining = pesData.size - offset
-            val headerSize: Int
 
-            if (first && remaining < TS_PAYLOAD_SIZE) {
-                // Need adaptation field for padding
-                val adaptLen = TS_PAYLOAD_SIZE - remaining
-                packet[3] = (0x30 or (videoCc and 0x0F)).toByte() // adaptation + payload
-                packet[4] = (adaptLen - 1).toByte()
-                if (adaptLen > 1) {
-                    packet[5] = 0x00 // flags
-                    for (i in 6 until 4 + adaptLen) {
-                        packet[i] = 0xFF.toByte() // stuffing
-                    }
-                }
-                headerSize = 4 + adaptLen
-            } else if (!first && remaining < TS_PAYLOAD_SIZE) {
-                val adaptLen = TS_PAYLOAD_SIZE - remaining
-                packet[3] = (0x30 or (videoCc and 0x0F)).toByte()
-                packet[4] = (adaptLen - 1).toByte()
-                if (adaptLen > 1) {
-                    packet[5] = 0x00
-                    for (i in 6 until 4 + adaptLen) {
-                        packet[i] = 0xFF.toByte()
-                    }
-                }
-                headerSize = 4 + adaptLen
-            } else {
+            var adaptSize = minAdapt
+            if (remaining < TS_PAYLOAD_SIZE - minAdapt) {
+                // Pad the tail of the access unit up to a full packet
+                adaptSize = TS_PAYLOAD_SIZE - remaining
+            }
+
+            val headerSize: Int
+            if (adaptSize == 0) {
                 packet[3] = (0x10 or (videoCc and 0x0F)).toByte() // payload only
                 headerSize = 4
+            } else {
+                packet[3] = (0x30 or (videoCc and 0x0F)).toByte() // adaptation + payload
+                packet[4] = (adaptSize - 1).toByte()
+                if (adaptSize > 1) {
+                    packet[5] = if (withPcr) 0x10.toByte() else 0x00.toByte() // PCR flag
+                    var pos = 6
+                    if (withPcr) {
+                        writePcr(packet, pos, pcrBase)
+                        pos += PCR_FIELD_SIZE
+                    }
+                    while (pos < 4 + adaptSize) {
+                        packet[pos] = 0xFF.toByte() // stuffing
+                        pos++
+                    }
+                }
+                headerSize = 4 + adaptSize
             }
 
             val payloadSize = minOf(remaining, TS_PACKET_SIZE - headerSize)
@@ -89,6 +97,18 @@ class TsMuxer {
         }
 
         return output.toByteArray()
+    }
+
+    /**
+     * Write a 42-bit PCR as a 33-bit base, 6 reserved bits and a 9-bit extension
+     */
+    private fun writePcr(packet: ByteArray, offset: Int, base: Long) {
+        packet[offset] = (base shr 25 and 0xFF).toByte()
+        packet[offset + 1] = (base shr 17 and 0xFF).toByte()
+        packet[offset + 2] = (base shr 9 and 0xFF).toByte()
+        packet[offset + 3] = (base shr 1 and 0xFF).toByte()
+        packet[offset + 4] = (((base and 1L) shl 7) or 0x7EL).toByte()
+        packet[offset + 5] = 0x00
     }
 
     private fun isKeyFrame(nalData: ByteArray): Boolean {
@@ -108,9 +128,7 @@ class TsMuxer {
         return false
     }
 
-    private fun buildPes(nalData: ByteArray, pts: Long): ByteArray {
-        val ptsTs = pts * 90 / 1000 // Convert us to 90kHz clock
-
+    private fun buildPes(nalData: ByteArray, ptsTs: Long): ByteArray {
         // Prepend SPS/PPS before keyframes
         val payload = if (isKeyFrame(nalData) && configData != null) {
             configData!! + nalData
@@ -118,8 +136,7 @@ class TsMuxer {
             nalData
         }
 
-        val pesHeaderLen = 14 // PES header with PTS
-        val pesLen = payload.size + 8 // 3 (header extension) + 5 (PTS) + payload
+        val pesLen = payload.size + 8 // 3 header extension bytes + 5 PTS bytes + payload
 
         val pes = ByteArrayOutputStream()
         // Start code
@@ -136,8 +153,8 @@ class TsMuxer {
             pes.write(pesLen shr 8 and 0xFF)
             pes.write(pesLen and 0xFF)
         }
-        // Flags: data alignment, PTS present
-        pes.write(0x80)
+        // data_alignment_indicator set, each PES starts on an access unit
+        pes.write(0x84)
         pes.write(0x80) // PTS only
         // PES header data length
         pes.write(0x05)
@@ -172,7 +189,7 @@ class TsMuxer {
             0xC1.toByte(),                  // version, current
             0x00, 0x00,                     // section number, last section
             0x00, 0x01,                     // program number (1)
-            0x10.toByte(), 0x00             // PMT PID (0x1000)
+            0xF0.toByte(), 0x00             // reserved bits + PMT PID 0x1000
         )
         System.arraycopy(pat, 0, packet, 5, pat.size)
 
@@ -253,5 +270,9 @@ class TsMuxer {
         private const val TS_PAYLOAD_SIZE = 184
         private const val SYNC_BYTE = 0x47.toByte()
         private const val VIDEO_PID = 0x100
+        private const val PCR_FIELD_SIZE = 6
+        private const val PCR_ADAPT_SIZE = 8
+        private const val PCR_LEAD_90KHZ = 18_000L
+        private const val MAX_33_BITS = 0x1FFFFFFFFL
     }
 }
