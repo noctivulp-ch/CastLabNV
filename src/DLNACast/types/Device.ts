@@ -1,5 +1,14 @@
 export type DeviceProtocol = 'dlna' | 'fcast' | 'external-display';
 
+/**
+ * Media kinds a renderer accepts
+ */
+export interface MediaSupport {
+    audio: boolean;
+    video: boolean;
+    image: boolean;
+}
+
 export interface Device {
     id: string;
     name: string;
@@ -10,6 +19,7 @@ export interface Device {
     manufacturer?: string;
     modelName?: string;
     capabilities?: string[];
+    mediaSupport?: MediaSupport;
     iconUrl?: string; // Single icon URL for display
     protocol: DeviceProtocol; // Protocol used by this device
 }

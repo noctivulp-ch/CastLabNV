@@ -15,21 +15,19 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class ScreenShareModule : Module() {
     private var pendingPort = 9126
     private var isSharing = false
+    private var pendingAudioOnly = false
 
     override fun definition() = ModuleDefinition {
         Name("ExpoScreenShare")
 
-        Events("onScreenShareStarted", "onScreenShareStopped", "onScreenShareError")
+        Events("onScreenShareStarted", "onScreenShareStopped", "onScreenShareError", "onAudioSilence")
 
         AsyncFunction("requestScreenShare") { port: Int ->
-            val activity = appContext.currentActivity
-                ?: throw Exception("No current activity")
+            requestCapture(port, false)
+        }
 
-            pendingPort = port
-            val mpManager = activity.getSystemService(Activity.MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
-            val captureIntent = mpManager.createScreenCaptureIntent()
-            activity.startActivityForResult(captureIntent, REQUEST_CODE)
+        AsyncFunction("requestAudioShare") { port: Int ->
+            requestCapture(port, true)
         }
 
         OnActivityResult { _, payload ->
@@ -37,9 +35,12 @@ class ScreenShareModule : Module() {
 
             if (payload.resultCode == Activity.RESULT_OK && payload.data != null) {
                 try {
-                    startService(payload.resultCode, payload.data!!, pendingPort)
+                    ScreenCaptureService.onSilenceDetected = {
+                        sendEvent("onAudioSilence", emptyMap<String, Any>())
+                    }
+                    startService(payload.resultCode, payload.data!!, pendingPort, pendingAudioOnly)
                     isSharing = true
-                    sendEvent("onScreenShareStarted", mapOf("port" to pendingPort))
+                    sendEvent("onScreenShareStarted", mapOf("port" to pendingPort, "audioOnly" to pendingAudioOnly))
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start screen share: ${e.message}")
                     sendEvent("onScreenShareError", mapOf("error" to (e.message ?: "Unknown error")))
@@ -50,6 +51,7 @@ class ScreenShareModule : Module() {
         }
 
         AsyncFunction("stopScreenShare") {
+            ScreenCaptureService.onSilenceDetected = null
             stopService()
             isSharing = false
             sendEvent("onScreenShareStopped", emptyMap<String, Any>())
@@ -60,10 +62,27 @@ class ScreenShareModule : Module() {
         }
     }
 
-    private fun startService(resultCode: Int, data: Intent, port: Int) {
+    /**
+     * The mode is applied once the user accepts the MediaProjection prompt
+     */
+    private fun requestCapture(port: Int, audioOnly: Boolean) {
+        val activity = appContext.currentActivity ?: throw Exception("No current activity")
+        if (audioOnly && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            throw Exception("Audio capture requires Android 10 or later")
+        }
+
+        pendingPort = port
+        pendingAudioOnly = audioOnly
+        val mpManager = activity.getSystemService(Activity.MEDIA_PROJECTION_SERVICE)
+                as MediaProjectionManager
+        activity.startActivityForResult(mpManager.createScreenCaptureIntent(), REQUEST_CODE)
+    }
+
+    private fun startService(resultCode: Int, data: Intent, port: Int, audioOnly: Boolean) {
         val context = appContext.reactContext ?: throw Exception("No React context")
         val intent = Intent(context, ScreenCaptureService::class.java).apply {
-            action = ScreenCaptureService.ACTION_START
+            action = if (audioOnly) ScreenCaptureService.ACTION_START_AUDIO
+            else ScreenCaptureService.ACTION_START
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
             putExtra(ScreenCaptureService.EXTRA_DATA, data)
             putExtra(ScreenCaptureService.EXTRA_PORT, port)

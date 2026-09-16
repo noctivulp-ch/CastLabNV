@@ -51,6 +51,8 @@
   "reset_colors_question": "Reset Colors?",
   "reset_colors_warning": "This will reset all colors to the current theme's defaults. Your custom colors will be lost.",
   "open_file": "Open file",
+  "cast_url": "Cast from URL",
+  "cast_url_hint": "Stream address",
   "open_files": "Open files",
   "no_files_selected": "No files selected",
   "unsupported_file_type": "Unsupported file type",
@@ -253,5 +255,10 @@
   },
   "screen_share_started": "Screen sharing started",
   "screen_share_stopped": "Screen sharing stopped",
-  "screen_share_failed": "Screen share failed"
+  "screen_share_failed": "Screen share failed",
+  "audio_share_started": "Audio sharing started",
+  "audio_share_stopped": "Audio sharing stopped",
+  "audio_share_failed": "Audio share failed",
+  "audio_share_silent": "No audio detected",
+  "audio_share_protected_apps": "The playing app blocks audio capture"
 }

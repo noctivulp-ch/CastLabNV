@@ -1,4 +1,4 @@
-import {Device} from "../types/Device";
+import {Device, MediaSupport} from "../types/Device";
 import {MediaInfo} from "../types/MediaInfo";
 import {initTranslate} from "../../localization/translate";
 
@@ -70,7 +70,18 @@ export class CastUtils {
     }
 
     static deviceSupportsMediaType(device: Device, mediaType: string): boolean {
-        return ['video/mp4', 'audio/mpeg', 'image/jpeg', 'image/png'].includes(mediaType);
+        const support = this.mediaSupportOf(device);
+        if (mediaType.startsWith('audio/')) return support.audio;
+        if (mediaType.startsWith('video/')) return support.video;
+        if (mediaType.startsWith('image/')) return support.image;
+        return true;
+    }
+
+    /**
+     * Everything is allowed when nothing was advertised
+     */
+    static mediaSupportOf(device?: Device | null): MediaSupport {
+        return device?.mediaSupport ?? {audio: true, video: true, image: true};
     }
 
     static formatErrorMessage(error: Error | string): string {

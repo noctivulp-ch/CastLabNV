@@ -7,6 +7,7 @@ import {getHeaderTitle} from '@react-navigation/elements';
 import {NativeStackHeaderProps,} from "@react-navigation/native-stack";
 import {ThemeContext} from "../../contexts/theme-context";
 import {CastManager} from "../../DLNACast/CastManager";
+import {CastUtils} from "../../DLNACast/utils/CastUtils";
 import {useCastManager} from "../../contexts/castManager-context";
 
 interface CustomAppBarProps {
@@ -14,11 +15,14 @@ interface CustomAppBarProps {
     onButtonCastPressed?: () => Promise<void>;
     onScreenSharePressed?: () => void;
     isScreenSharing?: boolean;
+    onAudioSharePressed?: () => void;
+    isAudioSharing?: boolean;
     themePressed: () => void;
     onPlaylistsPressed?: () => void;
     onVideoExtractorPressed?: () => void;
     onThemeCustomizerPressed?: () => void;
     onOpenFilePressed?: () => void;
+    onCastUrlPressed?: () => void;
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
@@ -30,10 +34,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                                                                                 onButtonCastPressed,
                                                                                 onScreenSharePressed,
                                                                                 isScreenSharing,
+                                                                                onAudioSharePressed,
+                                                                                isAudioSharing,
                                                                                 onPlaylistsPressed,
                                                                                 onVideoExtractorPressed,
                                                                                 onThemeCustomizerPressed,
-                                                                                onOpenFilePressed
+                                                                                onOpenFilePressed,
+                                                                                onCastUrlPressed
                                                                             }) => {
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
@@ -59,7 +66,11 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         title = i18n.t('theme_customizer');
     }
 
-    const {isConnected} = useCastManager();
+    const {isConnected, connectedDevice} = useCastManager();
+
+    // A renderer that accepts no video cannot display a shared screen
+    const screenShareSupported = CastUtils.mediaSupportOf(connectedDevice).video;
+    const audioShareSupported = CastUtils.mediaSupportOf(connectedDevice).audio;
 
     // Determine if we should hide cast and menu buttons
     const hideCastAndMenu = [
@@ -132,6 +143,13 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         }
     }
 
+    const castUrl = () => {
+        setMenuVisible(false);
+        if (onCastUrlPressed) {
+            onCastUrlPressed();
+        }
+    }
+
     const openAbout = () => {
         setMenuVisible(false);
         navigation.navigate('About');
@@ -156,12 +174,22 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
             <Appbar.Content title={title}/>
 
             {/* Screen share button — visible on Android, grayed out when not connected */}
-            {!hideCastAndMenu && Platform.OS === 'android' && (
+            {!hideCastAndMenu && Platform.OS === 'android' && screenShareSupported && (
                 <Appbar.Action
                     icon={isScreenSharing ? 'monitor-share' : 'monitor'}
                     onPress={onScreenSharePressed}
                     disabled={!isConnected}
                     color={isScreenSharing ? theme.colors.primary : undefined}
+                />
+            )}
+
+            {/* Audio share button, the counterpart for renderers without a display */}
+            {!hideCastAndMenu && Platform.OS === 'android' && audioShareSupported && (
+                <Appbar.Action
+                    icon={isAudioSharing ? 'volume-high' : 'volume-medium'}
+                    onPress={onAudioSharePressed}
+                    disabled={!isConnected}
+                    color={isAudioSharing ? theme.colors.primary : undefined}
                 />
             )}
 
@@ -191,6 +219,12 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
                     {/* Open file picker */}
                     <Menu.Item onPress={openFile} title={i18n.t('open_file')} leadingIcon={"file-document-outline"}
                                accessibilityLabel={i18n.t('open_file')}/>
+
+                    {/* Hand a stream URL straight to the renderer */}
+                    {isConnected && (
+                        <Menu.Item onPress={castUrl} title={i18n.t('cast_url')} leadingIcon={"link-variant"}
+                                   accessibilityLabel={i18n.t('cast_url')}/>
+                    )}
 
                     {/* Only show playlists menu item if not in playlists-related screens */}
                     {!hidePlaylistsMenuItem && (

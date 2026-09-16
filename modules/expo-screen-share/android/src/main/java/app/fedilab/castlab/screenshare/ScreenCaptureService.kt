@@ -24,7 +24,9 @@ class ScreenCaptureService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: ScreenEncoder? = null
+    private var audioEncoder: AudioEncoder? = null
     private var httpServer: StreamHttpServer? = null
+    private var audioOnly = false
 
     @Volatile
     private var active = false
@@ -38,7 +40,8 @@ class ScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> {
+            ACTION_START, ACTION_START_AUDIO -> {
+                audioOnly = intent.action == ACTION_START_AUDIO
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
                 val data = intent.getParcelableExtra<Intent>(EXTRA_DATA) ?: return START_NOT_STICKY
                 val port = intent.getIntExtra(EXTRA_PORT, 9126)
@@ -75,6 +78,11 @@ class ScreenCaptureService : Service() {
                     stopCapture()
                 }
             }, Handler(Looper.getMainLooper()))
+        }
+
+        if (audioOnly) {
+            startAudioCapture(port)
+            return
         }
 
         val metrics = resources.displayMetrics
@@ -115,8 +123,39 @@ class ScreenCaptureService : Service() {
         Log.i(TAG, "Screen capture started: ${width}x${height} on port $port")
     }
 
+    /**
+     * Stream system playback audio without mirroring the display
+     */
+    private fun startAudioCapture(port: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.e(TAG, "Audio capture needs Android 10")
+            stopSelf()
+            return
+        }
+
+        audioEncoder = AudioEncoder(mediaProjection!!)
+        audioEncoder!!.init()
+
+        httpServer = StreamHttpServer(port)
+        httpServer!!.start()
+
+        audioEncoder!!.setOutputCallback { frames ->
+            httpServer!!.pushData(frames)
+        }
+
+        audioEncoder!!.setSilenceCallback {
+            onSilenceDetected?.invoke()
+        }
+
+        audioEncoder!!.start()
+        active = true
+        Log.i(TAG, "Audio capture started on port $port")
+    }
+
     private fun stopCapture() {
         active = false
+        audioEncoder?.stop()
+        audioEncoder = null
         encoder?.stop()
         virtualDisplay?.release()
         mediaProjection?.stop()
@@ -168,10 +207,13 @@ class ScreenCaptureService : Service() {
     }
 
     companion object {
+        var onSilenceDetected: (() -> Unit)? = null
+
         private const val TAG = "ScreenCaptureService"
         private const val NOTIFICATION_ID = 2001
         private const val CHANNEL_ID = "screen_share_channel"
         const val ACTION_START = "app.fedilab.castlab.screenshare.START"
+        const val ACTION_START_AUDIO = "app.fedilab.castlab.screenshare.START_AUDIO"
         const val ACTION_STOP = "app.fedilab.castlab.screenshare.STOP"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"

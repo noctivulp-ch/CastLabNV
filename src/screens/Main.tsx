@@ -1,4 +1,4 @@
-import {Button, Dialog, PaperProvider, Portal, RadioButton} from "react-native-paper";
+import {Button, Dialog, PaperProvider, Portal, RadioButton, TextInput} from "react-native-paper";
 import {NavigationContainer, NavigationProp} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
@@ -104,6 +104,9 @@ const MainContent: React.FC = () => {
     const [screenSharing, setScreenSharing] = useState(false);
     const [aboutDialogVisible, setAboutDialogVisible] = useState(false);
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
+    const [castUrlDialogVisible, setCastUrlDialogVisible] = useState(false);
+    const [audioSharing, setAudioSharing] = useState(false);
+    const [castUrlValue, setCastUrlValue] = useState("");
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
     const dispatch = useDispatch();
     // Player height management and manual compact mode state
@@ -417,6 +420,62 @@ const MainContent: React.FC = () => {
     }, [screenSharing, castManager, i18n]);
 
     /**
+     * Handle audio share button press
+     */
+    const handleAudioSharePressed = useCallback(async () => {
+        if (Platform.OS !== 'android') return;
+
+        if (audioSharing) {
+            await ScreenShare.stopScreenShare();
+            setAudioSharing(false);
+            try {
+                await castManager.stop();
+            } catch (_) {}
+            showInfoToast(i18n.t('audio_share_stopped'));
+            return;
+        }
+
+        const startSub = ScreenShare.addScreenShareListener('onScreenShareStarted', async (payload) => {
+            setAudioSharing(true);
+            startSub.remove();
+            try {
+                const ip = await Network.getIpAddressAsync();
+                const streamUrl = `http://${ip}:${SCREEN_SHARE_PORT}/stream`;
+                await castManager.castMedia({
+                    contentUrl: streamUrl,
+                    contentType: 'audio/aac',
+                    metadata: {title: 'Audio Share', type: 'musicTrack', images: []},
+                });
+                showInfoToast(i18n.t('audio_share_started'));
+            } catch (e) {
+                showErrorToast(i18n.t('audio_share_failed'), (e as Error).message);
+                await ScreenShare.stopScreenShare();
+                setAudioSharing(false);
+            }
+        });
+
+        const errorSub = ScreenShare.addScreenShareListener('onScreenShareError', (payload) => {
+            errorSub.remove();
+            startSub.remove();
+            showErrorToast(i18n.t('audio_share_failed'), payload.error);
+        });
+
+        const silenceSub = ScreenShare.addScreenShareListener('onAudioSilence', () => {
+            silenceSub.remove();
+            showInfoToast(i18n.t('audio_share_silent'), i18n.t('audio_share_protected_apps'));
+        });
+
+        try {
+            await ScreenShare.requestAudioShare(SCREEN_SHARE_PORT);
+        } catch (e) {
+            startSub.remove();
+            errorSub.remove();
+            silenceSub.remove();
+            showErrorToast(i18n.t('audio_share_failed'), (e as Error).message);
+        }
+    }, [audioSharing, castManager, i18n]);
+
+    /**
      * Handle adding a manual FCast device
      */
     const handleAddFCastDevice = useCallback((ip: string, port: number, name?: string) => {
@@ -517,6 +576,29 @@ const MainContent: React.FC = () => {
         }
     };
 
+
+    /**
+     * Bypasses the local server for remote stream URLs
+     */
+    const castEnteredUrl = useCallback(async () => {
+        const url = castUrlValue.trim();
+        if (!url) return;
+
+        setCastUrlDialogVisible(false);
+        setCastUrlValue("");
+        try {
+            await castManager.castMedia({
+                contentUrl: url,
+                contentType: CastUtils.getMimeTypeFromUrl(url),
+                metadata: {title: url, images: []},
+                streamDuration: 0,
+            });
+        } catch (error) {
+            const message = (error as Error).message;
+            LogService.error('Cast', `Direct URL cast failed: ${message}`);
+            showErrorToast(i18n.t('failed_to_cast_media'), message || i18n.t('unknown_error'));
+        }
+    }, [castUrlValue, castManager, i18n, showErrorToast]);
 
     /**
      * Show theme picker dialog
@@ -697,10 +779,13 @@ const MainContent: React.FC = () => {
                             onButtonCastPressed={buttonCastPressed}
                             onScreenSharePressed={handleScreenSharePressed}
                             isScreenSharing={screenSharing}
+                            onAudioSharePressed={handleAudioSharePressed}
+                            isAudioSharing={audioSharing}
                             onPlaylistsPressed={() => handlePlaylistsPressed(navigation)}
                             onVideoExtractorPressed={() => handleVideoExtractorPressed(navigation)}
                             onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}
                             onOpenFilePressed={handleOpenFile}
+                            onCastUrlPressed={() => setCastUrlDialogVisible(true)}
                             castManager={castManager}
                             themePressed={displayThemePicker}
                         />,
@@ -942,6 +1027,30 @@ const MainContent: React.FC = () => {
                     <Dialog.Actions>
                         <Button onPress={() => setThemeDialogVisible(false)}>
                             {i18n.t('close')}
+                        </Button>
+                    </Dialog.Actions>
+                </Dialog>
+
+                <Dialog visible={castUrlDialogVisible} onDismiss={() => setCastUrlDialogVisible(false)}>
+                    <Dialog.Title>{i18n.t('cast_url')}</Dialog.Title>
+                    <Dialog.Content>
+                        <TextInput
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            keyboardType="url"
+                            mode="outlined"
+                            label={i18n.t('cast_url_hint')}
+                            value={castUrlValue}
+                            onChangeText={setCastUrlValue}
+                            onSubmitEditing={castEnteredUrl}
+                        />
+                    </Dialog.Content>
+                    <Dialog.Actions>
+                        <Button onPress={() => setCastUrlDialogVisible(false)}>
+                            {i18n.t('close')}
+                        </Button>
+                        <Button onPress={castEnteredUrl} disabled={!castUrlValue.trim()}>
+                            {i18n.t('cast')}
                         </Button>
                     </Dialog.Actions>
                 </Dialog>

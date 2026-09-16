@@ -14,6 +14,7 @@ import {DatePickerModal} from 'react-native-paper-dates';
 import {useScrollDirection} from "../hooks/useScrollDirection";
 
 import {CastUtils} from "../DLNACast/utils/CastUtils";
+import {useCastManager} from "../contexts/castManager-context";
 
 /**
  * Filters out non-castable media (files indexed by Android but not supported for DLNA/FCast casting)
@@ -58,14 +59,21 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
 
     // Media filtering and sorting state
     // All media types for unfiltered view
+    const {connectedDevice} = useCastManager();
+    const mediaSupport = CastUtils.mediaSupportOf(connectedDevice);
     const allMediaTypes: MediaLibrary.MediaTypeValue[] = [
-        MediaLibrary.MediaType.photo,
-        MediaLibrary.MediaType.video,
-        MediaLibrary.MediaType.audio
+        ...(mediaSupport.image ? [MediaLibrary.MediaType.photo] : []),
+        ...(mediaSupport.video ? [MediaLibrary.MediaType.video] : []),
+        ...(mediaSupport.audio ? [MediaLibrary.MediaType.audio] : [])
     ];
     const [type, setType] = useState<MediaLibrary.MediaTypeValue | MediaLibrary.MediaTypeValue[] | undefined>(
         initialMediaType ? initialMediaType as MediaLibrary.MediaTypeValue : (videoOnly ? "video" : allMediaTypes)
     );
+    const supportedByKind: Record<string, boolean> = {
+        photo: mediaSupport.image,
+        video: mediaSupport.video,
+        audio: mediaSupport.audio,
+    };
     const [sortModificationTimeAsc, setSortModificationTimeAsc] = useState<SortByValue>([SortBy.modificationTime, false]);
     const [sortCreationTimeAsc, setSortCreationTimeAsc] = useState<SortByValue | undefined>(undefined);
     const [sortDuration, setSortDuration] = useState<SortByValue | undefined>(undefined);
@@ -147,6 +155,21 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
     useImperativeHandle(ref, () => ({
         loadMoreAssets
     }), [loadMoreAssets]);
+
+    /**
+     * Reset the filter when the renderer cannot play the selected kind
+     */
+    useEffect(() => {
+        if (Array.isArray(type)) {
+            setType(allMediaTypes);
+            return;
+        }
+        if (type && !supportedByKind[type]) {
+            setType(allMediaTypes);
+            setTypeIcon("select-all");
+            setTypeText(i18n.t('all_media'));
+        }
+    }, [mediaSupport.image, mediaSupport.video, mediaSupport.audio]);
 
     /**
      * Update sorting criteria whenever individual sort options change
@@ -382,26 +405,26 @@ const AlbumScreen = forwardRef<AlbumScreenRef, AlbumProps>(({route, playerHeight
                         setType(videoOnly ? "video" : allMediaTypes);
                     }} title={i18n.t('all_media')} leadingIcon="select-all"/>
 
-                    <Menu.Item onPress={() => {
+                    {mediaSupport.image && <Menu.Item onPress={() => {
                         setTypeMenuVisible(false);
                         setTypeIcon("image");
                         setTypeText(i18n.t('pictures'));
                         setType("photo");
-                    }} title={i18n.t('pictures')} leadingIcon="image"/>
+                    }} title={i18n.t('pictures')} leadingIcon="image"/>}
 
-                    <Menu.Item onPress={() => {
+                    {mediaSupport.video && <Menu.Item onPress={() => {
                         setTypeMenuVisible(false);
                         setTypeIcon("video");
                         setTypeText(i18n.t('videos'));
                         setType("video");
-                    }} title={i18n.t('videos')} leadingIcon="video"/>
+                    }} title={i18n.t('videos')} leadingIcon="video"/>}
 
-                    <Menu.Item onPress={() => {
+                    {mediaSupport.audio && <Menu.Item onPress={() => {
                         setTypeMenuVisible(false);
                         setTypeIcon("music");
                         setTypeText(i18n.t('audios'));
                         setType("audio");
-                    }} title={i18n.t('audios')} leadingIcon="music"/>
+                    }} title={i18n.t('audios')} leadingIcon="music"/>}
                 </Menu>
 
                 {/* Sorting options menu */}

@@ -1,4 +1,4 @@
-import {Device} from './types/Device';
+import {Device, MediaSupport} from './types/Device';
 import {MediaInfo} from './types/MediaInfo';
 import {EventEmitter} from 'events';
 import Udp from 'react-native-udp';
@@ -399,6 +399,7 @@ export class CastManager extends EventEmitter {
                 this.currentDevice = device;
                 this.startPolling();
                 this.emit('connected', device);
+                this.detectMediaSupport(device);
             }
         } catch (err) {
             this.emit('error', this.i18n.t('error.connect', {message: (err as Error).message}));
@@ -1312,7 +1313,8 @@ export class CastManager extends EventEmitter {
                 list.forEach((service: any) => {
                     if (service?.serviceType && service?.controlURL) {
                         const type = service.serviceType;
-                        if (type.includes('AVTransport') || type.includes('RenderingControl')) {
+                        if (type.includes('AVTransport') || type.includes('RenderingControl') ||
+                            type.includes('ConnectionManager')) {
                             services[type] = service.controlURL;
                         }
                     }
@@ -1333,6 +1335,54 @@ export class CastManager extends EventEmitter {
         }
 
         return services;
+    }
+
+    /**
+     * Everything stays allowed when the probe fails
+     */
+    private async detectMediaSupport(device: Device): Promise<void> {
+        const service = Object.keys(device.services || {}).find(s => s.includes('ConnectionManager'));
+        if (!service) {
+            LogService.info('Cast', `${device.name} exposes no ConnectionManager, media support left open`);
+            return;
+        }
+
+        let support: MediaSupport | null = null;
+        try {
+            const response = await this.dlnaSoapAction(service, 'GetProtocolInfo', '', true);
+            const sink = response?.['u:GetProtocolInfoResponse']?.Sink;
+            support = this.parseSinkFormats(typeof sink === 'string' ? sink : '');
+        } catch (err) {
+            LogService.warn('Cast', `GetProtocolInfo failed on ${device.name}: ${(err as Error).message}`);
+        }
+
+        // Drop the result if the device changed while probing
+        if (!support || this.currentDevice !== device) return;
+
+        LogService.info('Cast', `${device.name} accepts audio=${support.audio} video=${support.video} image=${support.image}`);
+        const updated = {...device, mediaSupport: support};
+        this.currentDevice = updated;
+        this.emit('connected', updated);
+    }
+
+    /**
+     * Null when the sink advertises nothing usable
+     */
+    private parseSinkFormats(sink: string): MediaSupport | null {
+        const support: MediaSupport = {audio: false, video: false, image: false};
+
+        for (const entry of sink.split(',')) {
+            // Entries look like http-get:*:audio/mpeg:DLNA.ORG_PN=MP3
+            const mime = entry.split(':')[2]?.trim().toLowerCase();
+            if (!mime) continue;
+            // A wildcard sink means the renderer advertises no restriction
+            if (mime === '*' || mime === '*/*') return null;
+            if (mime.startsWith('audio/')) support.audio = true;
+            else if (mime.startsWith('video/')) support.video = true;
+            else if (mime.startsWith('image/')) support.image = true;
+        }
+
+        return support.audio || support.video || support.image ? support : null;
     }
 
     /**
