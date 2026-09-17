@@ -44,6 +44,7 @@ import AboutScreen from "./AboutScreen";
 import ThemeCustomizerScreen from "./ThemeCustomizerScreen";
 import {CastUtils} from "../DLNACast/utils/CastUtils";
 import * as ScreenShare from '../../modules/expo-screen-share/src';
+import * as ShareIntent from '../../modules/expo-share-intent/src';
 import {SCREEN_SHARE_PORT} from "../constants/Values";
 
 const rootReducer = combineReducers({
@@ -86,6 +87,44 @@ export type RootStackParamList = {
 const isIOS = Platform.OS === 'ios';
 const expo = SQLite.openDatabaseSync('db.db');
 const db = drizzle(expo);
+interface SharedFile {
+    uri: string;
+    name: string;
+    mimeType: string;
+}
+
+/**
+ * Picked and shared files reach the cast pipeline through one shape
+ */
+const buildAssets = (files: SharedFile[]): Asset[] => files.map((file) => {
+    let mediaType: 'photo' | 'video' | 'audio' = 'video';
+    if (file.mimeType.startsWith('image/')) {
+        mediaType = 'photo';
+    } else if (file.mimeType.startsWith('audio/')) {
+        mediaType = 'audio';
+    }
+
+    // Append extension from mimeType if the filename has none
+    let filename = file.name;
+    if (!filename.includes('.') && file.mimeType) {
+        const fallbackExt = CastUtils.getExtensionFromMimeType(file.mimeType);
+        if (fallbackExt) filename = filename + '.' + fallbackExt;
+    }
+
+    return {
+        id: `file-${Date.now()}-${file.name}`,
+        filename,
+        uri: file.uri,
+        mediaType,
+        width: 0,
+        height: 0,
+        duration: 0,
+        creationTime: Date.now(),
+        modificationTime: Date.now(),
+        albumId: '',
+    } as Asset;
+});
+
 const MainContent: React.FC = () => {
     const {setTheme, theme, statusBarTheme, type: themeType} = useContext(ThemeContext);
     const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -420,6 +459,22 @@ const MainContent: React.FC = () => {
     }, [screenSharing, castManager, i18n]);
 
     /**
+     * Offers the device picker when nothing is connected
+     */
+    const castSharedItems = useCallback((items: ShareIntent.SharedItem[]) => {
+        const assets = buildAssets(items);
+        if (assets.length === 0) return;
+
+        dispatch(addToAssets(assets));
+        dispatch(setCurrentAsset(assets[0]));
+
+        if (!castManager.isConnected()) {
+            castManager.startSearch();
+            setCastDialogVisible(true);
+        }
+    }, [dispatch, castManager]);
+
+    /**
      * Handle audio share button press
      */
     const handleAudioSharePressed = useCallback(async () => {
@@ -521,34 +576,11 @@ const MainContent: React.FC = () => {
                 return;
             }
 
-            const pickedAssets: Asset[] = result.assets.map((file) => {
-                let mediaType: 'photo' | 'video' | 'audio' = 'video';
-                if (file.mimeType?.startsWith('image/')) {
-                    mediaType = 'photo';
-                } else if (file.mimeType?.startsWith('audio/')) {
-                    mediaType = 'audio';
-                }
-
-                // Append extension from mimeType if the filename has none
-                let filename = file.name;
-                if (!filename.includes('.') && file.mimeType) {
-                    const fallbackExt = CastUtils.getExtensionFromMimeType(file.mimeType);
-                    if (fallbackExt) filename = filename + '.' + fallbackExt;
-                }
-
-                return {
-                    id: `file-${Date.now()}-${file.name}`,
-                    filename,
-                    uri: file.uri,
-                    mediaType,
-                    width: 0,
-                    height: 0,
-                    duration: 0,
-                    creationTime: Date.now(),
-                    modificationTime: Date.now(),
-                    albumId: '',
-                } as Asset;
-            });
+            const pickedAssets = buildAssets(result.assets.map((file) => ({
+                uri: file.uri,
+                name: file.name,
+                mimeType: file.mimeType ?? '',
+            })));
 
             if (pickedAssets.length > 0) {
                 dispatch(addToAssets(pickedAssets));
@@ -744,6 +776,20 @@ const MainContent: React.FC = () => {
 
         return () => subscription.remove();
     }, [connectedDevice]);
+
+    // Shares arrive on launch and while already running
+    useEffect(() => {
+        if (isIOS) return;
+
+        ShareIntent.getPendingShare()
+            .then(items => {
+                if (items.length > 0) castSharedItems(items);
+            })
+            .catch(error => LogService.warn('Cast', `Share intent read failed: ${error.message}`));
+
+        const subscription = ShareIntent.addShareListener(payload => castSharedItems(payload.items));
+        return () => subscription.remove();
+    }, [castSharedItems]);
 
     // App initialization effect
     useEffect(() => {
