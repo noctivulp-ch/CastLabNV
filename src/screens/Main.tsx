@@ -1,5 +1,5 @@
 import {Button, Dialog, PaperProvider, Portal, RadioButton, TextInput} from "react-native-paper";
-import {NavigationContainer, NavigationProp} from "@react-navigation/native";
+import {createNavigationContainerRef, NavigationContainer, NavigationProp} from "@react-navigation/native";
 import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} from "react";
 import {ThemeContext} from "../contexts/theme-context";
 import AlbumsScreen, {AlbumsScreenRef} from "./AlbumsScreen";
@@ -79,12 +79,13 @@ export type RootStackParamList = {
         allowMultiple?: boolean;
         playlistId: number;
     };
-    VideoExtractor: { playerHeight?: number };
+    VideoExtractor: { playerHeight?: number, sharedUrl?: string };
     ThemeCustomizer: {};
     About: undefined;
 }
 
 const isIOS = Platform.OS === 'ios';
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 const expo = SQLite.openDatabaseSync('db.db');
 const db = drizzle(expo);
 interface SharedFile {
@@ -216,6 +217,8 @@ const MainContent: React.FC = () => {
             if (cast?.currentAsset) {
                 let uri;
                 const asset: Asset = cast.currentAsset;
+                // A web address is already reachable
+                const isRemote = /^https?:\/\//i.test(asset.uri);
                 const albumId = asset?.albumId?.replace(/["'\-]/g, "") || "";
 
                 // Sanitize filename: keep only ASCII alphanumeric + underscore, append asset ID for uniqueness
@@ -236,7 +239,7 @@ const MainContent: React.FC = () => {
                 }
 
                 // Check if the file was not previously copied to fileDir
-                if (!await exists(fileDir + "/" + serverFileName)) {
+                if (!isRemote && !await exists(fileDir + "/" + serverFileName)) {
                     // Delete older copies and make sure the device can hold this one
                     const sourceInfo = await FileSystem.getInfoAsync(asset.uri).catch(() => null);
                     const sourceSize = sourceInfo?.exists ? sourceInfo.size : 0;
@@ -256,9 +259,13 @@ const MainContent: React.FC = () => {
                     }
                 }
 
-                // Get the internal network IP address of the device
-                const ip: string = await Network.getIpAddressAsync();
-                uri = `http://${ip}:${SERVER_PORT}/${serverFileName}`;
+                if (isRemote) {
+                    uri = asset.uri;
+                } else {
+                    // Get the internal network IP address of the device
+                    const ip: string = await Network.getIpAddressAsync();
+                    uri = `http://${ip}:${SERVER_PORT}/${serverFileName}`;
+                }
 
                 if (uri) {
                     try {
@@ -463,6 +470,15 @@ const MainContent: React.FC = () => {
      * Offers the device picker when nothing is connected
      */
     const castSharedItems = useCallback((items: ShareIntent.SharedItem[]) => {
+        // A shared link goes to the extractor
+        const link = items.find(item => item.text)?.text;
+        if (link) {
+            if (navigationRef.isReady()) {
+                navigationRef.navigate('VideoExtractor', {sharedUrl: link});
+            }
+            return;
+        }
+
         const assets = buildAssets(items);
         if (assets.length === 0) return;
 
@@ -852,7 +868,7 @@ const MainContent: React.FC = () => {
 
     return (
         <PaperProvider theme={theme}>
-            <NavigationContainer theme={statusBarTheme}>
+            <NavigationContainer ref={navigationRef} theme={statusBarTheme}>
                 <Stack.Navigator
                     initialRouteName="Albums"
                     screenOptions={({navigation}) => ({

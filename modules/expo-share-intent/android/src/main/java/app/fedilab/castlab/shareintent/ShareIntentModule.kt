@@ -46,7 +46,14 @@ class ShareIntentModule : Module() {
                 intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
             else -> emptyList()
         }
-        return uris.map { describe(it) }
+        if (uris.isNotEmpty()) return uris.map { describe(it) }
+
+        // A shared link arrives as text with no stream attached
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+        if (intent.action == Intent.ACTION_SEND && !text.isNullOrEmpty()) {
+            return listOf(mapOf("text" to text, "uri" to "", "name" to "", "mimeType" to "text/plain"))
+        }
+        return emptyList()
     }
 
     /**

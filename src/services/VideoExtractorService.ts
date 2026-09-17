@@ -4,6 +4,10 @@
  * Supports PeerTube and Invidious platforms via their APIs
  */
 
+// A YouTube id alone in a path
+const VIDEO_ID_PATH = /^\/[A-Za-z0-9_-]{11}$/;
+const RETRY_DELAY_MS = 800;
+
 export interface ExtractedVideo {
     id: string;
     url: string;
@@ -15,6 +19,7 @@ export interface ExtractedVideo {
 }
 
 export interface ExtractionResult {
+    challengedUrl?: string;
     success: boolean;
     videos: ExtractedVideo[];
     error?: string;
@@ -40,26 +45,20 @@ export class VideoExtractorService {
     // M3U/M3U8 playlist file extensions
     private static readonly M3U_EXTENSIONS = ['m3u', 'm3u8'];
 
-    // Default Invidious instance
-    private static DEFAULT_INVIDIOUS_INSTANCE = 'https://yewtu.be';
+    // Each entry says whether a playable source was measured
+    private static INSTANCES_PAYLOAD_URL =
+        'https://git.holos.social/tom79/untrackme-rules/raw/branch/main/payload.json';
 
-    // Fallback Invidious instances (used when primary instance fails)
+    private static EXTRACTOR_USER_AGENT = 'CastLab';
+
+    // Default Invidious instance
+    private static DEFAULT_INVIDIOUS_INSTANCE = 'https://invidious.tiekoetter.com';
+
+    // Only reached when the payload cannot be fetched
     private static FALLBACK_INVIDIOUS_INSTANCES = [
-        'https://yewtu.be',
-        'https://inv.tux.pizza',
-        'https://invidious.fdn.fr',
-        'https://iv.nboeck.de',
-        'https://invidious.jing.rocks',
-        'https://inv.us.projectsegfau.lt',
-        'https://invidious.privacydev.net',
-        'https://vid.puffyan.us',
-        'https://inv.riverside.rocks',
-        'https://invidious.flokinet.to',
-        'https://yt.artemislena.eu',
-        'https://invidious.projectsegfau.lt',
-        'https://inv.bp.projectsegfau.lt',
-        'https://invidious.io.lol',
-        'https://iv.ggtyler.dev',
+        'https://invidious.tiekoetter.com',
+        'https://invidious.f5.si',
+        'https://inv.nadeko.net',
     ];
 
     // Cache for dynamically fetched instances
@@ -196,8 +195,7 @@ export class VideoExtractorService {
             const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             try {
-                // Fetch from official Invidious API
-                const response = await fetch('https://api.invidious.io/instances.json', {
+                const response = await fetch(this.INSTANCES_PAYLOAD_URL, {
                     signal: controller.signal
                 });
 
@@ -207,21 +205,13 @@ export class VideoExtractorService {
                     throw new Error(`Failed to fetch instances: ${response.status}`);
                 }
 
-                const instances = await response.json();
+                const payload = await response.json();
+                const entries: any[] = Array.isArray(payload?.Youtube) ? payload.Youtube : [];
 
-                // Filter for working instances with API enabled
-                const workingInstances: string[] = [];
-
-                for (const [domain, info] of Object.entries(instances as Record<string, [number, any]>)) {
-                    const instanceInfo = info[1];
-
-                    // Check if instance is up, has API enabled, and uses HTTPS
-                    if (instanceInfo?.api === true &&
-                        instanceInfo?.type === 'https' &&
-                        domain.startsWith('http')) {
-                        workingInstances.push(domain);
-                    }
-                }
+                // Only instances measured as serving a source
+                const workingInstances = entries
+                    .filter(entry => entry?.domain && entry?.type === 'https' && entry?.playable === true)
+                    .map(entry => `https://${entry.domain}`);
 
                 // Cache the results
                 this.cachedInvidiousInstances = workingInstances;
@@ -290,6 +280,39 @@ export class VideoExtractorService {
     }
 
     /**
+     * Used when automatic extraction finds no source
+     */
+    static watchPageFor(url: string): string | null {
+        if (this.isYouTubeUrl(url)) {
+            return this.convertYouTubeToInvidious(url);
+        }
+
+        try {
+            const urlObj = new URL(url);
+            if (urlObj.searchParams.has('v')) return url;
+            if (VIDEO_ID_PATH.test(urlObj.pathname)) {
+                return `${urlObj.protocol}//${urlObj.host}/watch?v=${urlObj.pathname.slice(1)}`;
+            }
+        } catch {
+        }
+        return null;
+    }
+
+    /**
+     * Source resolved in the page rather than by extraction
+     */
+    static videoFromResolvedSource(sourceUrl: string, title: string): ExtractedVideo {
+        const itag = sourceUrl.match(/[?&]itag=(\d+)/)?.[1] ?? 'default';
+        return {
+            id: `invidious_resolved_${itag}`,
+            url: sourceUrl,
+            title,
+            format: 'video/mp4',
+            source: 'video-tag'
+        };
+    }
+
+    /**
      * Normalize URL by adding protocol if missing
      * @param url - URL to normalize
      * @returns Normalized URL with protocol
@@ -350,11 +373,10 @@ export class VideoExtractorService {
         }
 
         // Check common Invidious patterns
-        if (lowerUrl.includes('invidious') || lowerUrl.includes('/watch?v=')) {
-            // Additional check: must have video ID parameter
+        if (lowerUrl.includes('invidious') || lowerUrl.includes('inv.') || lowerUrl.includes('/watch?v=')) {
             try {
                 const urlObj = new URL(url);
-                if (urlObj.searchParams.has('v')) {
+                if (urlObj.searchParams.has('v') || VIDEO_ID_PATH.test(urlObj.pathname)) {
                     return 'invidious';
                 }
             } catch {
@@ -552,6 +574,11 @@ export class VideoExtractorService {
             videoId = url.split('/v/')[1].split(/[?#]/)[0];
         }
 
+        // Instances also serve the short form
+        if (!videoId && VIDEO_ID_PATH.test(urlObj.pathname)) {
+            videoId = urlObj.pathname.slice(1);
+        }
+
         if (!videoId) {
             return {
                 success: false,
@@ -610,6 +637,8 @@ export class VideoExtractorService {
 
         // Try each instance until one works
         let lastError: Error | null = null;
+        // A page served without a source is gated rather than broken
+        let gatedWatchUrl: string | undefined;
 
         for (let i = 0; i < instancesToTry.length; i++) {
             const baseUrl = instancesToTry[i];
@@ -617,44 +646,50 @@ export class VideoExtractorService {
             try {
                 console.log(`Trying Invidious instance ${i + 1}/${instancesToTry.length}: ${baseUrl}`);
 
-                const apiUrl = `${baseUrl}/api/v1/videos/${videoId}`;
+                const watchUrl = `${baseUrl}/watch?v=${videoId}`;
 
                 // Create timeout with AbortController
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
                 try {
-                    const response = await fetch(apiUrl, {
+                    let response = await fetch(watchUrl, {
+                        headers: {'User-Agent': this.EXTRACTOR_USER_AGENT},
                         signal: controller.signal
                     });
+
+                    // A brief hiccup should not lose a working instance
+                    if (response.status === 429 || response.status >= 500) {
+                        console.warn(`Instance ${baseUrl} returned ${response.status}, retrying once...`);
+                        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+                        response = await fetch(watchUrl, {
+                            headers: {'User-Agent': this.EXTRACTOR_USER_AGENT},
+                            signal: controller.signal
+                        });
+                    }
 
                     clearTimeout(timeoutId);
 
                     if (!response.ok) {
-                        // If rate limited or server error, try next instance
                         if (response.status === 429 || response.status >= 500) {
-                            console.warn(`Instance ${baseUrl} returned ${response.status}, trying next...`);
+                            console.warn(`Instance ${baseUrl} still returning ${response.status}, trying next...`);
                             lastError = new Error(`Instance returned ${response.status}`);
                             continue;
                         }
-                        throw new Error(`Invidious API returned ${response.status}`);
+                        if (response.status === 418 || response.status === 403) {
+                            gatedWatchUrl = gatedWatchUrl ?? watchUrl;
+                        }
+                        throw new Error(`Invidious page returned ${response.status}`);
                     }
 
-                    const data = await response.json();
-                    const videos: ExtractedVideo[] = [];
+                    const html = await response.text();
+                    const videos = this.videosFromWatchPage(html, videoId);
 
-                    // Extract video formats
-                    if (data.formatStreams && Array.isArray(data.formatStreams)) {
-                        data.formatStreams.forEach((format: any) => {
-                            videos.push({
-                                id: `invidious_${videoId}_${format.itag}`,
-                                url: format.url,
-                                title: `${data.title} (${format.qualityLabel || format.quality})`,
-                                thumbnail: data.videoThumbnails?.[0]?.url,
-                                format: format.qualityLabel || format.quality,
-                                source: 'video-tag'
-                            });
-                        });
+                    if (videos.length === 0) {
+                        console.warn(`Instance ${baseUrl} served no playable source, trying next...`);
+                        lastError = new Error('No playable source in page');
+                        gatedWatchUrl = gatedWatchUrl ?? watchUrl;
+                        continue;
                     }
 
                     console.log(`Successfully extracted ${videos.length} videos from ${baseUrl}`);
@@ -662,7 +697,7 @@ export class VideoExtractorService {
                     return {
                         success: true,
                         videos,
-                        pageTitle: data.title
+                        pageTitle: this.titleFromWatchPage(html)
                     };
                 } catch (fetchError) {
                     clearTimeout(timeoutId);
@@ -689,8 +724,50 @@ export class VideoExtractorService {
         return {
             success: false,
             videos: [],
+            challengedUrl: gatedWatchUrl,
             error: `Unable to extract video from Invidious. All ${instancesToTry.length} instances are currently unavailable. Invidious instances are often overloaded or blocked by YouTube. Please try again later or configure a different instance in settings.`
         };
+    }
+
+    /**
+     * Invidious renders its sources into the watch page
+     */
+    private static videosFromWatchPage(html: string, videoId: string): ExtractedVideo[] {
+        const title = this.titleFromWatchPage(html);
+        const videos: ExtractedVideo[] = [];
+        const pattern = /<source[^>]+src="([^"]+)"[^>]*type="([^"]*)"/g;
+
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(html)) !== null) {
+            const url = this.decodeEntities(match[1]);
+            // Manifest sources need a player a renderer does not have
+            if (!url.includes('latest_version')) continue;
+
+            const itag = url.match(/[?&]itag=(\d+)/)?.[1] ?? 'default';
+            videos.push({
+                id: `invidious_${videoId}_${itag}`,
+                url,
+                title,
+                format: this.decodeEntities(match[2]),
+                source: 'video-tag'
+            });
+        }
+
+        return videos;
+    }
+
+    private static titleFromWatchPage(html: string): string {
+        const raw = html.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '';
+        return this.decodeEntities(raw).replace(/\s*-\s*Invidious\s*$/i, '').trim();
+    }
+
+    private static decodeEntities(value: string): string {
+        return value
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>');
     }
 
     /**
@@ -706,7 +783,7 @@ export class VideoExtractorService {
             const response = await fetch(url, {
                 method: 'GET',
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; VideoExtractor/1.0)',
+                    'User-Agent': this.EXTRACTOR_USER_AGENT,
                 },
                 signal: controller.signal,
             });

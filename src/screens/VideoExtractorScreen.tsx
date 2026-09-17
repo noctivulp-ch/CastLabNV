@@ -17,15 +17,19 @@ import {
 import {ThemeContext} from '../contexts/theme-context';
 import {initTranslate} from '../localization/translate';
 import {ExtractedVideo, VideoExtractorService} from '../services/VideoExtractorService';
+import WatchPageResolver from '../componants/video/WatchPageResolver';
 import {ExtractedVideoWithHistory, VideoHistoryService} from '../../db/ExtractedVideoWithHistoryDB';
 import {useCastManager} from '../contexts/castManager-context';
 import {useDispatch} from 'react-redux';
+import {Asset} from 'expo-media-library';
+import {addToAssets, setCurrentAsset} from '../store/slice/castSlice';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
 
 interface VideoExtractorScreenProps {
     playerHeight?: number;
     onScrollDirectionChange?: (isScrollingDown: boolean) => void;
+    route?: {params?: {sharedUrl?: string}};
 }
 
 const INVIDIOUS_INSTANCE_KEY = 'invidious_instance';
@@ -74,6 +78,7 @@ const verifyInvidiousInstance = async (url: string): Promise<boolean> => {
 const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                                                                        playerHeight = 0,
                                                                        onScrollDirectionChange,
+                                                                       route,
                                                                    }) => {
     const {theme} = useContext(ThemeContext);
     const i18n = initTranslate();
@@ -89,6 +94,7 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
     const [videos, setVideos] = useState<ExtractedVideo[]>([]);
     const [pageTitle, setPageTitle] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | undefined>(undefined);
+    const [resolverUrl, setResolverUrl] = useState<string | undefined>(undefined);
     const [hasSearched, setHasSearched] = useState(false);
 
     // History state
@@ -297,6 +303,15 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
         setSettingsVisible(true);
     }, [invidiousInstance]);
 
+    // A link shared from another app lands here ready to extract
+    const sharedUrl = route?.params?.sharedUrl;
+    const pendingShare = useRef<string | undefined>(undefined);
+    useEffect(() => {
+        if (!sharedUrl) return;
+        pendingShare.current = sharedUrl;
+        setUrl(sharedUrl);
+    }, [sharedUrl]);
+
     /**
      * Handle URL extraction
      */
@@ -316,24 +331,23 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
         try {
             const result = await VideoExtractorService.extractFromUrl(url.trim());
 
-            if (result.success) {
+            if (result.success && result.videos.length > 0) {
                 setVideos(result.videos);
                 setPageTitle(result.pageTitle);
-
-                // Save to history
-                if (result.videos.length > 0) {
-                    await VideoHistoryService.saveExtraction(
-                        result.videos,
-                        url.trim(),
-                        result.pageTitle
-                    );
-                }
-
-                if (result.videos.length === 0) {
-                    setError(i18n.t('no_videos_found'));
-                }
+                await VideoHistoryService.saveExtraction(
+                    result.videos,
+                    url.trim(),
+                    result.pageTitle
+                );
             } else {
-                setError(result.error || i18n.t('extraction_failed'));
+                // Prefer the instance that answered with a check
+                const watchPage = result.challengedUrl ?? VideoExtractorService.watchPageFor(url.trim());
+                console.log(`[Extract] nothing found, page to open: ${watchPage ?? 'none'}`);
+                if (watchPage) {
+                    setResolverUrl(watchPage);
+                } else {
+                    setError(result.error || i18n.t('no_videos_found'));
+                }
             }
         } catch (err) {
             setError((err as Error).message || i18n.t('extraction_failed'));
@@ -341,6 +355,14 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
             setLoading(false);
         }
     }, [url, i18n]);
+
+    // Sharing a link is already a choice
+    useEffect(() => {
+        if (pendingShare.current && pendingShare.current === url) {
+            pendingShare.current = undefined;
+            handleExtract();
+        }
+    }, [url, handleExtract]);
 
     /**
      * Handle video cast
@@ -352,25 +374,29 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
         }
 
         try {
-            // For web-extracted videos, cast the URL directly without going through Redux
-            // This bypasses the local server requirement in Main.tsx
-            const metadata = {
-                title: video.title,
-                images: video.thumbnail ? [{url: video.thumbnail, width: 640, height: 480}] : [],
-            };
+            // Routed like any other media so the player follows
+            const asset = {
+                id: video.id,
+                filename: video.title,
+                uri: video.url,
+                mediaType: 'video',
+                width: 0,
+                height: 0,
+                duration: 0,
+                creationTime: Date.now(),
+                modificationTime: Date.now(),
+                albumId: '',
+            } as unknown as Asset;
 
-            await castManager.castMedia({
-                contentUrl: video.url,
-                metadata,
-                streamDuration: 0,
-            });
+            dispatch(addToAssets([asset]));
+            dispatch(setCurrentAsset(asset));
 
             console.log(`Casting video: ${video.title}`);
         } catch (err) {
             console.error('Cast error:', err);
             setError((err as Error).message || i18n.t('cast_failed'));
         }
-    }, [castManager, i18n]);
+    }, [dispatch, i18n]);
 
     /**
      * Handle scroll for compact mode
@@ -561,6 +587,20 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
             );
         }
 
+        if (resolverUrl) {
+            return (
+                <View style={styles.emptyState}>
+                    <ActivityIndicator size="large"/>
+                    <Text variant="titleMedium" style={styles.emptyTitle}>
+                        {i18n.t('checking_page')}
+                    </Text>
+                    <Text variant="bodyMedium" style={styles.emptyDescription}>
+                        {i18n.t('checking_page_hint')}
+                    </Text>
+                </View>
+            );
+        }
+
         if (error) {
             return (
                 <View style={styles.emptyState}>
@@ -571,6 +611,15 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                     <Text variant="bodyMedium" style={styles.emptyDescription}>
                         {error}
                     </Text>
+                    <Button
+                        mode="contained-tonal"
+                        icon="refresh"
+                        onPress={() => handleExtract()}
+                        disabled={loading || !url.trim()}
+                        style={styles.retryButton}
+                    >
+                        {i18n.t('retry')}
+                    </Button>
                 </View>
             );
         }
@@ -844,6 +893,19 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                     </Dialog.Actions>
                 </Dialog>
             </Portal>
+
+            <WatchPageResolver
+                watchUrl={resolverUrl}
+                onResolved={(sourceUrl) => {
+                    setResolverUrl(undefined);
+                    setVideos([VideoExtractorService.videoFromResolvedSource(sourceUrl, url.trim())]);
+                    setError(undefined);
+                }}
+                onFailed={() => {
+                    setResolverUrl(undefined);
+                    setError(i18n.t('extraction_failed'));
+                }}
+            />
         </View>
     );
 };
@@ -1023,6 +1085,9 @@ const useStyles = (theme: any) => StyleSheet.create({
         marginTop: 16,
         marginBottom: 8,
         textAlign: 'center',
+    },
+    retryButton: {
+        marginTop: 16,
     },
     emptyDescription: {
         color: theme.colors.onSurfaceVariant,

@@ -225,7 +225,18 @@ export class CastManager extends EventEmitter {
 
         // Start SSDP
         this.socket = Udp.createSocket({type: 'udp4'});
+
+        this.socket.on('message', (msg: Buffer, rinfo: any) => {
+            this.handleSsdpResponse(msg.toString(), rinfo);
+        });
+
+        this.socket.on('error', (err: Error) => {
+            this.emit('error', this.i18n.t('error.socket', {message: err?.message ?? 'unknown'}));
+        });
+
         this.socket.bind(0, () => {
+            // A stopped search leaves nothing to join
+            if (!this.socket) return;
             try {
                 this.socket.addMembership(MULTICAST_ADDRESS, localIp);
             } catch (err) {
@@ -249,18 +260,20 @@ export class CastManager extends EventEmitter {
             }, 5000));
         });
 
-        this.socket.on('message', (msg: Buffer, rinfo: any) => {
-            this.handleSsdpResponse(msg.toString(), rinfo);
-        });
-
-        this.socket.on('error', (err: Error) => {
-            this.emit('error', this.i18n.t('error.socket', {message: err.message}));
-        });
-
         // Start SSDP NOTIFY listener (port 1900 for receiving multicast advertisements)
         // Some devices may not respond to M-SEARCH but broadcast NOTIFY
         this.notifySocket = Udp.createSocket({type: 'udp4', reusePort: true});
+
+        this.notifySocket.on('message', (msg: Buffer, rinfo: any) => {
+            this.handleSsdpResponse(msg.toString(), rinfo);
+        });
+
+        this.notifySocket.on('error', (err: Error) => {
+            LogService.warn('SSDP', `NOTIFY socket error: ${err?.message ?? 'unknown'}`);
+        });
+
         this.notifySocket.bind(SSDP_PORT, () => {
+            if (!this.notifySocket) return;
             try {
                 this.notifySocket.addMembership(MULTICAST_ADDRESS, localIp);
             } catch (err) {
@@ -271,14 +284,6 @@ export class CastManager extends EventEmitter {
                 }
             }
             LogService.info('SSDP', 'NOTIFY listener started on port 1900');
-        });
-
-        this.notifySocket.on('message', (msg: Buffer, rinfo: any) => {
-            this.handleSsdpResponse(msg.toString(), rinfo);
-        });
-
-        this.notifySocket.on('error', (err: Error) => {
-            LogService.warn('SSDP', `NOTIFY socket error: ${err.message}`);
         });
 
         // Start FCast mDNS discovery
@@ -1158,6 +1163,8 @@ export class CastManager extends EventEmitter {
             `ST: ${searchTarget}\r\n\r\n`
         );
 
+        if (!this.socket) return;
+
         this.socket.send(message, 0, message.length, SSDP_PORT, MULTICAST_ADDRESS, (err: Error | null) => {
             if (err) this.emit('error', this.i18n.t('error.send', {message: err.message}));
         });
@@ -1338,7 +1345,7 @@ export class CastManager extends EventEmitter {
     }
 
     /**
-     * Everything stays allowed when the probe fails
+     * Everything stays allowed when detection fails
      */
     private async detectMediaSupport(device: Device): Promise<void> {
         const service = Object.keys(device.services || {}).find(s => s.includes('ConnectionManager'));
@@ -1356,7 +1363,7 @@ export class CastManager extends EventEmitter {
             LogService.warn('Cast', `GetProtocolInfo failed on ${device.name}: ${(err as Error).message}`);
         }
 
-        // Drop the result if the device changed while probing
+        // Drop the result if the device changed during detection
         if (!support || this.currentDevice !== device) return;
 
         LogService.info('Cast', `${device.name} accepts audio=${support.audio} video=${support.video} image=${support.image}`);

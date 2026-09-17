@@ -5,6 +5,7 @@ export interface SharedItem {
     uri: string;
     name: string;
     mimeType: string;
+    text?: string;
 }
 
 export function getPendingShare(): Promise<SharedItem[]> {
