@@ -120,6 +120,7 @@ class ScreenCaptureService : Service() {
 
         encoder!!.start()
         active = true
+        running = true
         Log.i(TAG, "Screen capture started: ${width}x${height} on port $port")
     }
 
@@ -149,11 +150,13 @@ class ScreenCaptureService : Service() {
 
         audioEncoder!!.start()
         active = true
+        running = true
         Log.i(TAG, "Audio capture started on port $port")
     }
 
     private fun stopCapture() {
         active = false
+        running = false
         audioEncoder?.stop()
         audioEncoder = null
         encoder?.stop()
@@ -207,6 +210,8 @@ class ScreenCaptureService : Service() {
     }
 
     companion object {
+        @Volatile
+        var running = false
         var onSilenceDetected: (() -> Unit)? = null
 
         private const val TAG = "ScreenCaptureService"

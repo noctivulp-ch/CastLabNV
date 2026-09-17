@@ -9,6 +9,10 @@ export function requestAudioShare(port: number): Promise<void> {
     return ExpoScreenShare.requestAudioShare(port);
 }
 
+export function consumeTileRequest(): Promise<boolean> {
+    return ExpoScreenShare.consumeTileRequest();
+}
+
 export function stopScreenShare(): Promise<void> {
     return ExpoScreenShare.stopScreenShare();
 }
@@ -18,7 +22,7 @@ export function isScreenSharing(): boolean {
 }
 
 export type ScreenShareEvent =
-    'onScreenShareStarted' | 'onScreenShareStopped' | 'onScreenShareError' | 'onAudioSilence';
+    'onScreenShareStarted' | 'onScreenShareStopped' | 'onScreenShareError' | 'onAudioSilence' | 'onTileRequest';
 
 export function addScreenShareListener(
     event: ScreenShareEvent,

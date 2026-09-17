@@ -145,6 +145,7 @@ const MainContent: React.FC = () => {
     const [themeDialogVisible, setThemeDialogVisible] = useState(false);
     const [castUrlDialogVisible, setCastUrlDialogVisible] = useState(false);
     const [audioSharing, setAudioSharing] = useState(false);
+    const tileRequestPending = useRef(false);
     const [castUrlValue, setCastUrlValue] = useState("");
     const [playerCompactMode, setPlayerCompactMode] = useState<boolean>(false);
     const dispatch = useDispatch();
@@ -776,6 +777,44 @@ const MainContent: React.FC = () => {
 
         return () => subscription.remove();
     }, [connectedDevice]);
+
+    /**
+     * The tile has no device list of its own
+     */
+    const handleTileRequest = useCallback(() => {
+        if (screenSharing) return;
+
+        if (castManager.isConnected()) {
+            handleScreenSharePressed();
+            return;
+        }
+
+        tileRequestPending.current = true;
+        castManager.startSearch();
+        setCastDialogVisible(true);
+    }, [screenSharing, castManager, handleScreenSharePressed]);
+
+    // The tile request waits for a device to be chosen
+    useEffect(() => {
+        if (connectedDevice && tileRequestPending.current) {
+            tileRequestPending.current = false;
+            handleScreenSharePressed();
+        }
+    }, [connectedDevice, handleScreenSharePressed]);
+
+    // A cold start reads the launch intent, a live app gets an event
+    useEffect(() => {
+        if (isIOS) return;
+
+        ScreenShare.consumeTileRequest()
+            .then(requested => {
+                if (requested) handleTileRequest();
+            })
+            .catch(error => LogService.warn('Cast', `Tile request read failed: ${error.message}`));
+
+        const subscription = ScreenShare.addScreenShareListener('onTileRequest', handleTileRequest);
+        return () => subscription.remove();
+    }, [handleTileRequest]);
 
     // Shares arrive on launch and while already running
     useEffect(() => {

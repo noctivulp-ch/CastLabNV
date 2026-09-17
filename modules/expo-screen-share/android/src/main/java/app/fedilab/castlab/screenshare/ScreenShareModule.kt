@@ -20,7 +20,7 @@ class ScreenShareModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ExpoScreenShare")
 
-        Events("onScreenShareStarted", "onScreenShareStopped", "onScreenShareError", "onAudioSilence")
+        Events("onScreenShareStarted", "onScreenShareStopped", "onScreenShareError", "onAudioSilence", "onTileRequest")
 
         AsyncFunction("requestScreenShare") { port: Int ->
             requestCapture(port, false)
@@ -47,6 +47,23 @@ class ScreenShareModule : Module() {
                 }
             } else {
                 sendEvent("onScreenShareError", mapOf("error" to "Permission denied"))
+            }
+        }
+
+        /**
+         * False unless the app was brought forward by the Quick Settings tile
+         */
+        AsyncFunction("consumeTileRequest") {
+            val intent = appContext.currentActivity?.intent
+            val requested = intent?.getBooleanExtra(ScreenShareTileService.EXTRA_START_SCREEN_SHARE, false) ?: false
+            if (requested) intent?.removeExtra(ScreenShareTileService.EXTRA_START_SCREEN_SHARE)
+            requested
+        }
+
+        OnNewIntent { intent ->
+            if (intent.getBooleanExtra(ScreenShareTileService.EXTRA_START_SCREEN_SHARE, false)) {
+                intent.removeExtra(ScreenShareTileService.EXTRA_START_SCREEN_SHARE)
+                sendEvent("onTileRequest", emptyMap<String, Any>())
             }
         }
 
