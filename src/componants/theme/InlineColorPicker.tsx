@@ -1,7 +1,8 @@
-import React, {useState} from 'react';
+import React, {useEffect} from 'react';
 import {ScrollView, StyleSheet, View} from 'react-native';
 import {Button, Dialog, Portal, Text, TextInput} from 'react-native-paper';
 import ColorPicker from 'react-native-wheel-color-picker';
+import {useHexColorField} from '../../hooks/useHexColorField';
 
 interface InlineColorPickerProps {
     visible: boolean;
@@ -23,7 +24,19 @@ const InlineColorPicker: React.FC<InlineColorPickerProps> = ({
                                                                  onSave,
                                                                  onDismiss
                                                              }) => {
-    const [selectedColor, setSelectedColor] = useState(initialColor);
+    const {
+        color: selectedColor,
+        hexText,
+        reset,
+        onWheelChange,
+        onWheelTouch,
+        onHexChange,
+        onHexBlur
+    } = useHexColorField(initialColor);
+
+    useEffect(() => {
+        if (visible) reset(initialColor);
+    }, [visible, initialColor, reset]);
 
     const handleSave = () => {
         onSave(selectedColor);
@@ -35,11 +48,11 @@ const InlineColorPicker: React.FC<InlineColorPickerProps> = ({
                 <Dialog.Title>Select {colorKey}</Dialog.Title>
                 <Dialog.ScrollArea style={styles.scrollArea}>
                     <ScrollView>
-                        <View style={styles.pickerContainer}>
+                        <View style={styles.pickerContainer} onTouchStart={onWheelTouch}>
                             <ColorPicker
                                 color={selectedColor}
-                                onColorChange={setSelectedColor}
-                                onColorChangeComplete={setSelectedColor}
+                                onColorChange={onWheelChange}
+                                onColorChangeComplete={onWheelChange}
                                 thumbSize={30}
                                 sliderSize={30}
                                 noSnap={true}
@@ -48,8 +61,11 @@ const InlineColorPicker: React.FC<InlineColorPickerProps> = ({
                         </View>
                         <TextInput
                             label="Hex Color"
-                            value={selectedColor}
-                            onChangeText={setSelectedColor}
+                            value={hexText}
+                            onChangeText={onHexChange}
+                            onBlur={onHexBlur}
+                            autoCapitalize="none"
+                            autoCorrect={false}
                             mode="outlined"
                             style={styles.input}
                         />

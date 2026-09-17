@@ -8,6 +8,7 @@ import {initTranslate} from '../localization/translate';
 import lightColors from '../theme/light.json';
 import darkColors from '../theme/dark.json';
 import KeyboardAwareDialog from '../componants/KeyboardAwareDialog';
+import {useHexColorField} from '../hooks/useHexColorField';
 
 interface ColorItemProps {
     label: string;
@@ -51,7 +52,15 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
     const {theme, customColors, applyCustomTheme: applyThemeFromContext, type} = useContext(ThemeContext);
     const [pickerVisible, setPickerVisible] = useState(false);
     const [currentColorKey, setCurrentColorKey] = useState<string | null>(null);
-    const [currentColor, setCurrentColor] = useState('#000000');
+    const {
+        color: currentColor,
+        hexText,
+        reset: resetColorField,
+        onWheelChange,
+        onWheelTouch,
+        onHexChange,
+        onHexBlur
+    } = useHexColorField('#000000');
     const [resetDialogVisible, setResetDialogVisible] = useState(false);
     const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
     const [baseTheme, setBaseTheme] = useState<'light' | 'dark'>('light');
@@ -81,7 +90,7 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
      */
     const openColorPicker = (colorKey: string, currentValue: string) => {
         setCurrentColorKey(colorKey);
-        setCurrentColor(currentValue);
+        resetColorField(currentValue);
         setPickerVisible(true);
         setSelectedPreset(null); // Clear preset selection when manually editing
     };
@@ -306,11 +315,11 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
                         {i18n.t('select_color_for')} {currentColorKey}
                     </Dialog.Title>
                     <Dialog.Content>
-                        <View style={styles.pickerContainer}>
+                        <View style={styles.pickerContainer} onTouchStart={onWheelTouch}>
                             <ColorPicker
                                 color={currentColor}
-                                onColorChange={setCurrentColor}
-                                onColorChangeComplete={setCurrentColor}
+                                onColorChange={onWheelChange}
+                                onColorChangeComplete={onWheelChange}
                                 thumbSize={30}
                                 sliderSize={30}
                                 noSnap={true}
@@ -319,8 +328,11 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
                         </View>
                         <TextInput
                             label={i18n.t('hex_color')}
-                            value={currentColor}
-                            onChangeText={setCurrentColor}
+                            value={hexText}
+                            onChangeText={onHexChange}
+                            onBlur={onHexBlur}
+                            autoCapitalize="none"
+                            autoCorrect={false}
                             mode="outlined"
                             style={styles.hexInput}
                         />
