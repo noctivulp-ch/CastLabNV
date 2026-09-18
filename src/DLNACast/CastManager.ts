@@ -22,6 +22,10 @@ const CACHE_TTL = CastConfig.CACHE_TTL;
 const MAX_RETRY_ATTEMPTS = CastConfig.MAX_RETRY_ATTEMPTS;
 const REQUEST_TIMEOUT = CastConfig.REQUEST_TIMEOUT;
 
+const PLAY_CONFIRM_DELAY_MS = 800;
+
+const STOP_GRACE_MS = 1500;
+
 export interface PlaybackState {
     position: number; // Current playback position in seconds
     duration: number; // Media duration in seconds
@@ -404,7 +408,9 @@ export class CastManager extends EventEmitter {
                 this.currentDevice = device;
                 this.startPolling();
                 this.emit('connected', device);
-                this.detectMediaSupport(device);
+                // Not awaited, the check must not delay the connected state
+                this.detectMediaSupport(device).catch((err: Error) =>
+                    LogService.warn('Cast', `Media support detection failed: ${err.message}`));
             }
         } catch (err) {
             this.emit('error', this.i18n.t('error.connect', {message: (err as Error).message}));
@@ -531,6 +537,7 @@ export class CastManager extends EventEmitter {
             LogService.warn('Cast', `Device may not support media type: ${mediaInfo.contentType}`);
         }
 
+        const previousType = this.currentMediaInfo?.contentType;
         this.currentMediaInfo = mediaInfo;
         this.currentMediaUri = mediaInfo.contentUrl;
 
@@ -549,11 +556,25 @@ export class CastManager extends EventEmitter {
             } else {
                 // DLNA protocol
                 this.soapCache.clear();
+
+                // Renderers keep a player per media kind, the old one must go first
+                const kindChanged = !!previousType &&
+                    CastUtils.mediaKindOf(previousType) !== CastUtils.mediaKindOf(mediaInfo.contentType);
+                if (kindChanged) {
+                    LogService.info('Cast', `Stop before switching from ${previousType} to ${mediaInfo.contentType}`);
+                    await Promise.race([
+                        this.dlnaStop().catch((err: Error) =>
+                            LogService.warn('Cast', `Stop refused: ${err.message}`)),
+                        new Promise(resolve => setTimeout(resolve, STOP_GRACE_MS)),
+                    ]);
+                }
+
                 const didlMetadata = this.buildDIDLMetadata(mediaInfo);
                 LogService.info('Cast', `SetAVTransportURI: ${mediaInfo.contentUrl} (${mediaInfo.contentType})`);
                 await this.dlnaSetAVTransportURI(mediaInfo.contentUrl, didlMetadata);
                 LogService.info('Cast', 'Play command sent');
                 await this.dlnaPlay();
+                if (kindChanged) await this.confirmPlaying();
                 this.startHeartbeat();
                 this.emit('progressChanged', 0);
                 this.forceStatusUpdate();
@@ -1451,6 +1472,23 @@ ${body}
         await this.dlnaSoapAction('urn:schemas-upnp-org:service:AVTransport:1', 'Play', `<InstanceID>0</InstanceID><Speed>1</Speed>`);
     }
 
+
+    /**
+     * A renderer that just swapped player can take the URI and stay paused
+     */
+    private async confirmPlaying(): Promise<void> {
+        await new Promise(resolve => setTimeout(resolve, PLAY_CONFIRM_DELAY_MS));
+        try {
+            const info = await this.dlnaSoapAction(
+                'urn:schemas-upnp-org:service:AVTransport:1', 'GetTransportInfo', `<InstanceID>0</InstanceID>`, false);
+            const state = info?.['u:GetTransportInfoResponse']?.CurrentTransportState;
+            if (state === 'PLAYING') return;
+            LogService.info('Cast', `Renderer sat in ${state}, sending Play again`);
+            await this.dlnaPlay();
+        } catch (err) {
+            LogService.warn('Cast', `Play confirmation failed: ${(err as Error).message}`);
+        }
+    }
 
     /**
      * Stop playing media on a DLNA device.

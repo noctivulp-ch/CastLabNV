@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef} from 'react';
-import {useDispatch, useSelector} from 'react-redux';
+import {useDispatch, useSelector, useStore} from 'react-redux';
 import {Asset} from 'expo-media-library';
 import {IRootState} from '../screens/Main';
 import {nextAsset} from '../store/slice/castSlice';
@@ -20,6 +20,7 @@ export interface UseAutoplayProps {
 
 export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = {}) => {
     const dispatch = useDispatch();
+    const store = useStore<IRootState>();
     const cast = useSelector((state: IRootState) => state.cast);
     const {playbackState, mediaItemEndCount, connectedDevice} = useCastManager();
     const isFCast = connectedDevice?.protocol === 'fcast';
@@ -79,20 +80,19 @@ export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = 
             if (isAtEnd && onLoadMoreAssets) {
                 try {
                     await onLoadMoreAssets();
-                    // Wait a bit for the assets to be loaded
-                    await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (error) {
                     console.error('Autoplay: Failed to load more assets:', error);
                     return;
                 }
             }
 
-            // Check if we have a next asset
-            const hasNext = cast.currentIndex < cast.assets.length - 1;
+            // The captured state predates the page just loaded
+            const current = store.getState().cast;
+            const hasNext = current.currentIndex >= 0 && current.currentIndex < current.assets.length - 1;
 
             if (hasNext) {
-                const nextAssetIndex = cast.currentIndex + 1;
-                const nextAssetItem = cast.assets[nextAssetIndex];
+                const nextAssetIndex = current.currentIndex + 1;
+                const nextAssetItem = current.assets[nextAssetIndex];
 
 
                 // Notify parent component
@@ -106,7 +106,7 @@ export const useAutoplay = ({onLoadMoreAssets, onNextAsset}: UseAutoplayProps = 
             isAdvancingRef.current = false;
             mediaEndDetectedRef.current = false;
         }
-    }, [cast, dispatch, onLoadMoreAssets, onNextAsset]);
+    }, [cast, dispatch, store, onLoadMoreAssets, onNextAsset]);
 
     /**
      * Start timer-based autoplay for images

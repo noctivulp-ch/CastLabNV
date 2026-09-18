@@ -78,6 +78,13 @@ export class CastUtils {
     }
 
     /**
+     * The leading part of a MIME type, empty when there is nothing to read
+     */
+    static mediaKindOf(contentType?: string | null): string {
+        return contentType?.split('/')[0].trim().toLowerCase() ?? '';
+    }
+
+    /**
      * Everything is allowed when nothing was advertised
      */
     static mediaSupportOf(device?: Device | null): MediaSupport {

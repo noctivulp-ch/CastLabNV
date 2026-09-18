@@ -8,20 +8,26 @@ import android.service.quicksettings.TileService
 import android.util.Log
 
 /**
- * Brings the app forward and asks it to start screen sharing.
+ * Brings the app forward to start sharing, and stops it without leaving the panel.
  */
 class ScreenShareTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
-        qsTile?.apply {
-            state = if (ScreenCaptureService.running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            updateTile()
-        }
+        refreshTile()
     }
 
     override fun onClick() {
         super.onClick()
+
+        // Stopping needs no activity, the service is already running
+        if (ScreenCaptureService.running) {
+            startService(Intent(this, ScreenCaptureService::class.java).apply {
+                action = ScreenCaptureService.ACTION_STOP
+            })
+            refreshTile()
+            return
+        }
 
         // MediaProjection consent needs an activity
         val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
@@ -44,6 +50,24 @@ class ScreenShareTileService : TileService() {
         } else {
             @Suppress("DEPRECATION")
             startActivityAndCollapse(launch)
+        }
+    }
+
+    /**
+     * Without a label the tile falls back to the manifest and shows no state
+     */
+    private fun refreshTile() {
+        val sharing = ScreenCaptureService.running
+        qsTile?.apply {
+            state = if (sharing) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+            label = getString(R.string.screen_share_tile_label)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                subtitle = getString(
+                    if (sharing) R.string.screen_share_tile_active
+                    else R.string.screen_share_tile_idle
+                )
+            }
+            updateTile()
         }
     }
 

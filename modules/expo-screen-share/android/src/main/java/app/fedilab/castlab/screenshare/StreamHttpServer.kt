@@ -18,22 +18,21 @@ class StreamHttpServer(private val port: Int) {
     // Lets the encoder emit a keyframe when a client joins
     var onClientConnected: (() -> Unit)? = null
 
+    /**
+     * Binds before returning so the caller never publishes a URL that nothing answers
+     */
     fun start() {
+        serverSocket = ServerSocket(port)
         running = true
+        Log.i(TAG, "Stream server started on port $port")
         Thread {
-            try {
-                serverSocket = ServerSocket(port)
-                Log.i(TAG, "Stream server started on port $port")
-                while (running) {
-                    try {
-                        val socket = serverSocket!!.accept()
-                        handleClient(socket)
-                    } catch (e: Exception) {
-                        if (running) Log.w(TAG, "Accept error: ${e.message}")
-                    }
+            while (running) {
+                try {
+                    val socket = serverSocket!!.accept()
+                    handleClient(socket)
+                } catch (e: Exception) {
+                    if (running) Log.w(TAG, "Accept error: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Server start error: ${e.message}")
             }
         }.start()
     }

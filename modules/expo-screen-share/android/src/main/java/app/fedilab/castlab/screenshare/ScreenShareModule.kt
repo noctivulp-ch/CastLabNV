@@ -38,9 +38,20 @@ class ScreenShareModule : Module() {
                     ScreenCaptureService.onSilenceDetected = {
                         sendEvent("onAudioSilence", emptyMap<String, Any>())
                     }
+                    // Started fires when capture is really running
+                    ScreenCaptureService.onCaptureStarted = {
+                        isSharing = true
+                        sendEvent("onScreenShareStarted", mapOf("port" to pendingPort, "audioOnly" to pendingAudioOnly))
+                    }
+                    ScreenCaptureService.onCaptureStopped = { wasAudioOnly ->
+                        isSharing = false
+                        sendEvent("onScreenShareStopped", mapOf("audioOnly" to wasAudioOnly))
+                    }
+                    ScreenCaptureService.onCaptureError = { message ->
+                        isSharing = false
+                        sendEvent("onScreenShareError", mapOf("error" to message))
+                    }
                     startService(payload.resultCode, payload.data!!, pendingPort, pendingAudioOnly)
-                    isSharing = true
-                    sendEvent("onScreenShareStarted", mapOf("port" to pendingPort, "audioOnly" to pendingAudioOnly))
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start screen share: ${e.message}")
                     sendEvent("onScreenShareError", mapOf("error" to (e.message ?: "Unknown error")))
@@ -69,9 +80,12 @@ class ScreenShareModule : Module() {
 
         AsyncFunction("stopScreenShare") {
             ScreenCaptureService.onSilenceDetected = null
+            ScreenCaptureService.onCaptureStarted = null
+            ScreenCaptureService.onCaptureStopped = null
+            ScreenCaptureService.onCaptureError = null
             stopService()
             isSharing = false
-            sendEvent("onScreenShareStopped", emptyMap<String, Any>())
+            sendEvent("onScreenShareStopped", mapOf("audioOnly" to pendingAudioOnly))
         }
 
         Function("isScreenSharing") {
@@ -117,7 +131,11 @@ class ScreenShareModule : Module() {
         val intent = Intent(context, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_STOP
         }
-        context.startService(intent)
+        try {
+            context.startService(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop the capture service: ${e.message}")
+        }
     }
 
     companion object {

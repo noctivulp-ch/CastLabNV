@@ -155,6 +155,9 @@ const MainContent: React.FC = () => {
     const [manualCompactMode, setManualCompactMode] = useState<boolean>(false);
     const loadMoreAssetsRef = useRef<(() => Promise<void>) | null>(null);
 
+    // Only one native server, so starts must not overlap
+    const serverOpRef = useRef<Promise<unknown>>(Promise.resolve());
+
     // Playlist refresh management
     const [playlistsScreenRef, setPlaylistsScreenRef] = useState<PlaylistsScreenRef | null>(null);
 
@@ -396,7 +399,8 @@ const MainContent: React.FC = () => {
      * Handle cast button press - connect/disconnect or show device list
      */
     const buttonCastPressed = async () => {
-        if (castManager.isConnected()) {
+        // Same source as the icon, or the two can disagree
+        if (isConnected) {
             try {
                 await castManager.disconnect();
 
@@ -424,11 +428,6 @@ const MainContent: React.FC = () => {
 
         if (screenSharing) {
             await ScreenShare.stopScreenShare();
-            setScreenSharing(false);
-            try {
-                await castManager.stop();
-            } catch (_) {}
-            showInfoToast(i18n.t('screen_share_stopped'));
             return;
         }
 
@@ -466,6 +465,28 @@ const MainContent: React.FC = () => {
         }
     }, [screenSharing, castManager, i18n]);
 
+    // Fires on every silence
+    useEffect(() => {
+        const sub = ScreenShare.addScreenShareListener('onAudioSilence', () => {
+            showInfoToast(i18n.t('audio_share_silent'), i18n.t('audio_share_protected_apps'));
+        });
+        return () => sub.remove();
+    }, [i18n, showInfoToast]);
+
+    // The stop can come from outside the app
+    useEffect(() => {
+        const sub = ScreenShare.addScreenShareListener('onScreenShareStopped', async (payload) => {
+            const audioOnly = payload?.audioOnly === true;
+            setScreenSharing(false);
+            setAudioSharing(false);
+            try {
+                await castManager.stop();
+            } catch (_) {}
+            showInfoToast(i18n.t(audioOnly ? 'audio_share_stopped' : 'screen_share_stopped'));
+        });
+        return () => sub.remove();
+    }, [castManager, i18n, showInfoToast]);
+
     /**
      * Offers the device picker when nothing is connected
      */
@@ -499,11 +520,6 @@ const MainContent: React.FC = () => {
 
         if (audioSharing) {
             await ScreenShare.stopScreenShare();
-            setAudioSharing(false);
-            try {
-                await castManager.stop();
-            } catch (_) {}
-            showInfoToast(i18n.t('audio_share_stopped'));
             return;
         }
 
@@ -532,17 +548,11 @@ const MainContent: React.FC = () => {
             showErrorToast(i18n.t('audio_share_failed'), payload.error);
         });
 
-        const silenceSub = ScreenShare.addScreenShareListener('onAudioSilence', () => {
-            silenceSub.remove();
-            showInfoToast(i18n.t('audio_share_silent'), i18n.t('audio_share_protected_apps'));
-        });
-
         try {
             await ScreenShare.requestAudioShare(SCREEN_SHARE_PORT);
         } catch (e) {
             startSub.remove();
             errorSub.remove();
-            silenceSub.remove();
             showErrorToast(i18n.t('audio_share_failed'), (e as Error).message);
         }
     }, [audioSharing, castManager, i18n]);
@@ -692,7 +702,9 @@ const MainContent: React.FC = () => {
                 console.log(`Main: Starting media server on ${ip}:${SERVER_PORT}`);
 
                 // DLNA server configuration with proper headers
+                // The 5s keep-alive default drops the connection between two images
                 const extraConfig = `server.range-requests = "enable"
+                    server.max-keep-alive-idle = 300
                     server.modules += ("mod_setenv")
                     setenv.add-response-header = (
                         "transferMode.dlna.org" => "Streaming",
@@ -753,21 +765,18 @@ const MainContent: React.FC = () => {
             }
         };
 
-        startServers();
+        serverOpRef.current = serverOpRef.current.then(startServers).catch(() => {});
         prevConnectedDevice.current = connectedDevice;
 
         return () => {
             isMounted = false;
-            (async () => {
-                const stopPromises = [];
-                if (serverRef.current) {
-                    stopPromises.push(
-                        serverRef.current.stop().catch((err: Error) => console.error('Main: Error stopping StaticServer:', err.message))
-                    );
-                    serverRef.current = null;
-                }
-                await Promise.all(stopPromises);
-            })();
+            const server = serverRef.current;
+            serverRef.current = null;
+            if (server) {
+                serverOpRef.current = serverOpRef.current.then(() =>
+                    server.stop().catch((err: Error) => console.error('Main: Error stopping StaticServer:', err.message))
+                );
+            }
         };
     }, [connectedDevice]);
 
@@ -887,7 +896,6 @@ const MainContent: React.FC = () => {
                             onThemeCustomizerPressed={() => handleThemeCustomizerPressed(navigation)}
                             onOpenFilePressed={handleOpenFile}
                             onCastUrlPressed={() => setCastUrlDialogVisible(true)}
-                            castManager={castManager}
                             themePressed={displayThemePicker}
                         />,
                     })}
@@ -900,11 +908,11 @@ const MainContent: React.FC = () => {
                         {(props) => {
                             const albumsRef = useRef<AlbumsScreenRef>(null);
 
-                            // Update the ref when screen mounts for autoplay support
+                            // Read the ref when called, it changes with every page
                             useEffect(() => {
-                                if (albumsRef.current?.loadMoreAssets) {
-                                    loadMoreAssetsRef.current = albumsRef.current.loadMoreAssets;
-                                }
+                                loadMoreAssetsRef.current = async () => {
+                                    await albumsRef.current?.loadMoreAssets();
+                                };
 
                                 // Clean up ref when unmounting
                                 return () => {
@@ -931,11 +939,11 @@ const MainContent: React.FC = () => {
                         {(props) => {
                             const albumRef = useRef<AlbumScreenRef>(null);
 
-                            // Update the ref when screen mounts for autoplay support
+                            // Read the ref when called, it changes with every page
                             useEffect(() => {
-                                if (albumRef.current?.loadMoreAssets) {
-                                    loadMoreAssetsRef.current = albumRef.current.loadMoreAssets;
-                                }
+                                loadMoreAssetsRef.current = async () => {
+                                    await albumRef.current?.loadMoreAssets();
+                                };
 
                                 // Clean up ref when unmounting
                                 return () => {
@@ -971,10 +979,10 @@ const MainContent: React.FC = () => {
                             const playlistsRef = useRef<PlaylistsScreenRef>(null);
 
                             useEffect(() => {
-                                if (playlistsRef.current?.refreshPlaylists) {
-                                    loadMoreAssetsRef.current = playlistsRef.current.refreshPlaylists;
-                                    setPlaylistsScreenRef(playlistsRef.current);
-                                }
+                                loadMoreAssetsRef.current = async () => {
+                                    await playlistsRef.current?.refreshPlaylists();
+                                };
+                                setPlaylistsScreenRef(playlistsRef.current);
                                 return () => {
                                     loadMoreAssetsRef.current = null;
                                     setPlaylistsScreenRef(null);

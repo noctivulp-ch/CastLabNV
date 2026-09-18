@@ -33,7 +33,7 @@ class AudioEncoder(
     private var captureThread: Thread? = null
     private var drainThread: Thread? = null
     private var sampleRateIndex = 0
-    private var silenceCallback: (() -> Unit)? = null
+    private var silenceCallback: ((Boolean) -> Unit)? = null
     private var silentBytes = 0L
     private var silenceReported = false
 
@@ -42,9 +42,9 @@ class AudioEncoder(
     }
 
     /**
-     * Invoked once when the capture stays silent, which is how a protected app behaves
+     * Invoked with true when the capture falls silent, false when sound returns
      */
-    fun setSilenceCallback(callback: () -> Unit) {
+    fun setSilenceCallback(callback: (Boolean) -> Unit) {
         silenceCallback = callback
     }
 
@@ -128,7 +128,11 @@ class AudioEncoder(
         for (i in 0 until read) {
             if (buffer[i].toInt() != 0) {
                 silentBytes = 0
-                silenceReported = false
+                if (silenceReported) {
+                    silenceReported = false
+                    Log.i(TAG, "Capture is no longer silent")
+                    silenceCallback?.invoke(false)
+                }
                 return
             }
         }
@@ -137,7 +141,7 @@ class AudioEncoder(
         if (!silenceReported && silentBytes >= silenceThresholdBytes()) {
             silenceReported = true
             Log.i(TAG, "Capture silent for ${SILENCE_THRESHOLD_MS}ms, the source may block capture")
-            silenceCallback?.invoke()
+            silenceCallback?.invoke(true)
         }
     }
 

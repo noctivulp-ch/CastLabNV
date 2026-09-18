@@ -12,6 +12,7 @@ class TsMuxer {
     private var videoCc = 0
     private var configData: ByteArray? = null // SPS + PPS
     private var firstPtsUs = -1L
+    private var lastPcr = -1L
 
     fun setConfigData(data: ByteArray) {
         configData = data
@@ -29,7 +30,7 @@ class TsMuxer {
         // Rebase MediaCodec uptime timestamps so PTS fits in 33 bits
         if (firstPtsUs < 0) firstPtsUs = pts
         val elapsed90k = (pts - firstPtsUs) * 90 / 1000
-        val pcrBase = elapsed90k and MAX_33_BITS
+        val pcrBase = monotonicPcr(elapsed90k and MAX_33_BITS)
         val ptsTs = (elapsed90k + PCR_LEAD_90KHZ) and MAX_33_BITS
 
         // Insert PAT + PMT before each keyframe
@@ -97,6 +98,39 @@ class TsMuxer {
         }
 
         return output.toByteArray()
+    }
+
+    /**
+     * Build a PCR only packet so the clock survives a still screen.
+     * Returns null until the first access unit has set the time origin.
+     */
+    fun pcrOnly(pts: Long): ByteArray? {
+        if (firstPtsUs < 0) return null
+        val pcrBase = monotonicPcr(((pts - firstPtsUs) * 90 / 1000) and MAX_33_BITS)
+
+        val packet = ByteArray(TS_PACKET_SIZE)
+        packet[0] = SYNC_BYTE
+        packet[1] = (VIDEO_PID shr 8 and 0x1F).toByte()
+        packet[2] = (VIDEO_PID and 0xFF).toByte()
+        // Adaptation field only, the counter stays put since there is no payload
+        packet[3] = (0x20 or (videoCc and 0x0F)).toByte()
+        packet[4] = (TS_PACKET_SIZE - 5).toByte()
+        packet[5] = 0x10.toByte() // PCR flag
+        writePcr(packet, 6, pcrBase)
+        for (i in 6 + PCR_FIELD_SIZE until TS_PACKET_SIZE) {
+            packet[i] = 0xFF.toByte() // stuffing
+        }
+        return packet
+    }
+
+    /**
+     * Frames are stamped at capture time and the heartbeat at drain time
+     */
+    private fun monotonicPcr(value: Long): Long {
+        val wrapped = lastPcr >= 0 && lastPcr - value > MAX_33_BITS / 2
+        if (lastPcr >= 0 && value < lastPcr && !wrapped) return lastPcr
+        lastPcr = value
+        return value
     }
 
     /**

@@ -27,12 +27,20 @@ class ScreenEncoder(
     private var running = false
     private var outputCallback: ((ByteArray) -> Unit)? = null
     private var outputThread: Thread? = null
+    private var pcrThread: Thread? = null
+
+    // The drain and the heartbeat both emit, so they take turns
+    private val muxLock = Any()
+
+    @Volatile
+    private var lastOutputNs = 0L
 
     fun init() {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 50_000L)
             setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
@@ -83,8 +91,11 @@ class ScreenEncoder(
                         } else if (bufferInfo.size > 0) {
                             val nalData = ByteArray(bufferInfo.size)
                             outputBuffer.get(nalData)
-                            val tsPackets = tsMuxer.mux(nalData, bufferInfo.presentationTimeUs)
-                            outputCallback?.invoke(tsPackets)
+                            synchronized(muxLock) {
+                                val tsPackets = tsMuxer.mux(nalData, bufferInfo.presentationTimeUs)
+                                lastOutputNs = System.nanoTime()
+                                outputCallback?.invoke(tsPackets)
+                            }
                         }
 
                         codec!!.releaseOutputBuffer(index, false)
@@ -95,13 +106,35 @@ class ScreenEncoder(
             }
         }
         outputThread!!.start()
+
+        // A still screen produces no frame, so the PCR would stop with it
+        pcrThread = Thread {
+            while (running) {
+                try {
+                    Thread.sleep(PCR_INTERVAL_MS)
+                    if (System.nanoTime() - lastOutputNs < PCR_INTERVAL_MS * 1_000_000) continue
+                    synchronized(muxLock) {
+                        val packet = tsMuxer.pcrOnly(System.nanoTime() / 1000)
+                        if (packet != null) {
+                            lastOutputNs = System.nanoTime()
+                            outputCallback?.invoke(packet)
+                        }
+                    }
+                } catch (e: InterruptedException) {
+                    break
+                }
+            }
+        }
+        pcrThread!!.start()
         Log.i(TAG, "Encoder started")
     }
 
     fun stop() {
         running = false
+        pcrThread?.interrupt()
         try {
             outputThread?.join(2000)
+            pcrThread?.join(500)
         } catch (_: Exception) {}
         try {
             codec?.stop()
@@ -117,5 +150,6 @@ class ScreenEncoder(
 
     companion object {
         private const val TAG = "ScreenEncoder"
+        private const val PCR_INTERVAL_MS = 40L
     }
 }

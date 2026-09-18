@@ -3,9 +3,12 @@ package app.fedilab.castlab.screenshare
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
@@ -14,6 +17,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
+import android.service.quicksettings.TileService
 import android.util.Log
 
 /**
@@ -27,6 +32,8 @@ class ScreenCaptureService : Service() {
     private var audioEncoder: AudioEncoder? = null
     private var httpServer: StreamHttpServer? = null
     private var audioOnly = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var silentCapture = false
 
     @Volatile
     private var active = false
@@ -55,10 +62,20 @@ class ScreenCaptureService : Service() {
                 } else {
                     startForeground(NOTIFICATION_ID, buildNotification())
                 }
-                startCapture(resultCode, data, port)
+                try {
+                    startCapture(resultCode, data, port)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Capture start failed: ${e.message}")
+                    stopCapture()
+                    onCaptureError?.invoke(e.message ?: "Capture start failed")
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
             ACTION_STOP -> {
+                val wasAudioOnly = audioOnly
                 stopCapture()
+                onCaptureStopped?.invoke(wasAudioOnly)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -70,20 +87,25 @@ class ScreenCaptureService : Service() {
         val mpManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = mpManager.getMediaProjection(resultCode, data)
 
-        // Android 14+ requires a callback registered before createVirtualDisplay
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            mediaProjection!!.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    Log.i(TAG, "MediaProjection stopped by system")
-                    stopCapture()
-                }
-            }, Handler(Looper.getMainLooper()))
-        }
+        // Registered before createVirtualDisplay, Android 14+ requires it
+        mediaProjection!!.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                Log.i(TAG, "MediaProjection stopped by system")
+                val wasAudioOnly = audioOnly
+                stopCapture()
+                onCaptureStopped?.invoke(wasAudioOnly)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }, Handler(Looper.getMainLooper()))
 
         if (audioOnly) {
             startAudioCapture(port)
             return
         }
+
+        // The system revokes the projection when the screen locks
+        acquireScreenLock()
 
         val metrics = resources.displayMetrics
         // Scale down to half resolution (must be even)
@@ -122,6 +144,16 @@ class ScreenCaptureService : Service() {
         active = true
         running = true
         Log.i(TAG, "Screen capture started: ${width}x${height} on port $port")
+        refreshTile()
+        onCaptureStarted?.invoke()
+    }
+
+    private fun acquireScreenLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        @Suppress("DEPRECATION")
+        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "CastLab:screenShare")
+        wakeLock?.acquire()
     }
 
     /**
@@ -144,19 +176,25 @@ class ScreenCaptureService : Service() {
             httpServer!!.pushData(frames)
         }
 
-        audioEncoder!!.setSilenceCallback {
-            onSilenceDetected?.invoke()
+        audioEncoder!!.setSilenceCallback { silent ->
+            reportSilence(silent)
         }
 
         audioEncoder!!.start()
         active = true
         running = true
         Log.i(TAG, "Audio capture started on port $port")
+        refreshTile()
+        onCaptureStarted?.invoke()
     }
 
     private fun stopCapture() {
         active = false
         running = false
+        silentCapture = false
+        refreshTile()
+        if (wakeLock?.isHeld == true) wakeLock?.release()
+        wakeLock = null
         audioEncoder?.stop()
         audioEncoder = null
         encoder?.stop()
@@ -168,6 +206,22 @@ class ScreenCaptureService : Service() {
         mediaProjection = null
         httpServer = null
         Log.i(TAG, "Screen capture stopped")
+    }
+
+    /**
+     * A toast cannot reach a user in another app, a notification can
+     */
+    private fun reportSilence(silent: Boolean) {
+        silentCapture = silent
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+        if (silent) onSilenceDetected?.invoke()
+    }
+
+    private fun refreshTile() {
+        TileService.requestListeningState(
+            this,
+            ComponentName(this, ScreenShareTileService::class.java)
+        )
     }
 
     fun isActive(): Boolean = active
@@ -193,26 +247,57 @@ class ScreenCaptureService : Service() {
 
     private fun buildNotification(): Notification {
         val appIcon = applicationInfo.icon
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val stop = PendingIntent.getService(
+            this, 0,
+            Intent(this, ScreenCaptureService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
+            PendingIntent.getActivity(
+                this, 1, it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("CastLab")
-                .setContentText("Screen sharing is active")
-                .setSmallIcon(appIcon)
-                .build()
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("CastLab")
-                .setContentText("Screen sharing is active")
-                .setSmallIcon(appIcon)
-                .build()
         }
+
+        return builder
+            .setContentTitle(getString(R.string.screen_share_notification_title))
+            .setContentText(
+                getString(
+                    when {
+                        silentCapture -> R.string.screen_share_notification_silent
+                        audioOnly -> R.string.screen_share_notification_audio
+                        else -> R.string.screen_share_notification_screen
+                    }
+                )
+            )
+            .setSmallIcon(appIcon)
+            .apply { if (open != null) setContentIntent(open) }
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                    getString(R.string.screen_share_notification_stop),
+                    stop
+                ).build()
+            )
+            .build()
     }
 
     companion object {
         @Volatile
         var running = false
         var onSilenceDetected: (() -> Unit)? = null
+
+        // The service starts asynchronously and reports its own state
+        var onCaptureStarted: (() -> Unit)? = null
+        var onCaptureStopped: ((Boolean) -> Unit)? = null
+        var onCaptureError: ((String) -> Unit)? = null
 
         private const val TAG = "ScreenCaptureService"
         private const val NOTIFICATION_ID = 2001

@@ -1,17 +1,15 @@
 import * as React from 'react';
-import {useContext, useEffect, useState} from 'react';
+import {useContext, useState} from 'react';
 import {Appbar, Menu} from 'react-native-paper';
 import {Platform, StyleSheet} from "react-native";
 import {initTranslate} from "../../localization/translate";
 import {getHeaderTitle} from '@react-navigation/elements';
 import {NativeStackHeaderProps,} from "@react-navigation/native-stack";
 import {ThemeContext} from "../../contexts/theme-context";
-import {CastManager} from "../../DLNACast/CastManager";
 import {CastUtils} from "../../DLNACast/utils/CastUtils";
 import {useCastManager} from "../../contexts/castManager-context";
 
 interface CustomAppBarProps {
-    castManager: CastManager;
     onButtonCastPressed?: () => Promise<void>;
     onScreenSharePressed?: () => void;
     isScreenSharing?: boolean;
@@ -26,7 +24,6 @@ interface CustomAppBarProps {
 }
 
 const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
-                                                                                castManager,
                                                                                 navigation,
                                                                                 route,
                                                                                 options,
@@ -45,7 +42,6 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     const i18n = initTranslate();
     const [menuVisible, setMenuVisible] = useState(false);
     const {theme} = useContext(ThemeContext);
-    const [castIcon, setCastIcon] = useState<string | null>(castManager?.isConnected() ? "cast-connected" : "cast");
 
     // Get title from options or route
     let title = getHeaderTitle(options, route.name);
@@ -67,6 +63,7 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
     }
 
     const {isConnected, connectedDevice} = useCastManager();
+    const castIcon = isConnected ? "cast-connected" : "cast";
 
     // A renderer that accepts no video cannot display a shared screen
     const screenShareSupported = CastUtils.mediaSupportOf(connectedDevice).video;
@@ -101,14 +98,6 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         'PlaylistEdit',
         'MediaSelector'
     ].includes(route.name);
-
-    useEffect(() => {
-        if (isConnected) {
-            setCastIcon("cast-connected");
-        } else {
-            setCastIcon("cast");
-        }
-    }, [isConnected]);
 
     const changeTheme = () => {
         setMenuVisible(false);
@@ -194,7 +183,7 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
             )}
 
             {/* Only show cast button if not in hidden screens */}
-            {!hideCastAndMenu && castIcon && (
+            {!hideCastAndMenu && (
                 <Appbar.Action icon={castIcon} onPress={onButtonCastPressed}/>
             )}
 

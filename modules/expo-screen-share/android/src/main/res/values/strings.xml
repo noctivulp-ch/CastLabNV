@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="screen_share_tile_label">CastLab</string>
+    <string name="screen_share_tile_idle">Cast screen</string>
+    <string name="screen_share_tile_active">Sharing</string>
+    <string name="screen_share_notification_title">CastLab</string>
+    <string name="screen_share_notification_screen">Screen sharing is active</string>
+    <string name="screen_share_notification_audio">Audio sharing is active</string>
+    <string name="screen_share_notification_silent">No audio detected, the playing app blocks capture</string>
+    <string name="screen_share_notification_stop">Stop</string>
+</resources>
