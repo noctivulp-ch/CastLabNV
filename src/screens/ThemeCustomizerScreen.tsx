@@ -56,6 +56,7 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
         color: currentColor,
         hexText,
         reset: resetColorField,
+        commit: commitColorField,
         onWheelChange,
         onWheelTouch,
         onHexChange,
@@ -99,10 +100,11 @@ const ThemeCustomizerScreen: React.FC<any> = () => {
      * Save selected color
      */
     const saveColor = () => {
+        const chosen = commitColorField();
         if (currentColorKey) {
             const newColors = {
                 ...colors,
-                [currentColorKey]: currentColor,
+                [currentColorKey]: chosen,
             };
             setColors(newColors);
         }

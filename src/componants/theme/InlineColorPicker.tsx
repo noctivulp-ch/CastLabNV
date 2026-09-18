@@ -28,6 +28,7 @@ const InlineColorPicker: React.FC<InlineColorPickerProps> = ({
         color: selectedColor,
         hexText,
         reset,
+        commit,
         onWheelChange,
         onWheelTouch,
         onHexChange,
@@ -39,7 +40,7 @@ const InlineColorPicker: React.FC<InlineColorPickerProps> = ({
     }, [visible, initialColor, reset]);
 
     const handleSave = () => {
-        onSave(selectedColor);
+        onSave(commit());
     };
 
     return (

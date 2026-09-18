@@ -17,7 +17,7 @@ export const toHexColor = (value: string): string | null => {
     const hex = normalizeHex(value);
     if (hex) return hex;
 
-    const rgb = value.match(/^\s*rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    const rgb = value.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
     if (!rgb) return null;
 
     const channels = rgb.slice(1, 4).map(Number);
@@ -71,8 +71,19 @@ export const useHexColorField = (initialColor: string) => {
      * Leaving an incomplete entry restores the last color that parsed
      */
     const onHexBlur = useCallback(() => {
-        setHexText(normalizeHex(hexText) ?? color);
+        const hex = normalizeHex(hexText);
+        setHexText(hex ?? color);
+        if (hex) setColor(hex);
     }, [hexText, color]);
 
-    return {color, hexText, reset, onWheelChange, onWheelTouch, onHexChange, onHexBlur};
+    /**
+     * The field may never lose focus inside a dialog
+     */
+    const commit = useCallback(() => {
+        const hex = normalizeHex(hexText);
+        if (hex) setColor(hex);
+        return hex ?? color;
+    }, [hexText, color]);
+
+    return {color, hexText, reset, commit, onWheelChange, onWheelTouch, onHexChange, onHexBlur};
 };
