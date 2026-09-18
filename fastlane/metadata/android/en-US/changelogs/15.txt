@@ -1,0 +1,19 @@
+Added
+- Cast the phone audio to a speaker
+- Cast a stream directly from its web address
+- Share pictures, videos and audio from any app
+- Share a link to extract its video
+- Quick Settings tile to start screen sharing
+- Working Invidious instances are picked automatically
+
+Fixed
+- Storage no longer fills up with copies of cast media
+- Screen sharing no longer buffers on FCast receivers
+- Audio-only speakers are not offered videos and images
+- Hex color values can be typed in the theme editor
+- YouTube extraction works again
+- Screen sharing no longer stops when the screen turns off
+- Screen sharing can be stopped from the tile or notification
+- A warning shows when an app blocks audio capture
+- Autoplay no longer stops partway through a large album
+- Live videos now say they cannot be extracted
