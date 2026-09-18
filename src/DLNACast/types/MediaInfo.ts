@@ -10,4 +10,5 @@ export interface MediaInfo {
     contentType?: string; // MIME type, e.g., 'video/mp4'
     metadata?: MediaMetadata; // Optional metadata
     streamDuration?: number; // Optional duration for videos
+    isLive?: boolean; // Endless stream, nothing to seek or count
 }

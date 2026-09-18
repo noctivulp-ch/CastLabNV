@@ -8,7 +8,7 @@ import {ThemeContext} from '../../contexts/theme-context';
 interface WatchPageResolverProps {
     watchUrl?: string;
     onResolved: (sourceUrl: string) => void;
-    onFailed: () => void;
+    onFailed: (reason?: 'live') => void;
 }
 
 // A page that checks the client on its own settles sooner
@@ -29,13 +29,18 @@ const EXTRACT_SCRIPT = `
         return video && video.src && video.src.indexOf('latest_version') !== -1 ? video.src : null;
     };
     var attempts = 0;
+    var blobSeen = 0;
     var timer = setInterval(function () {
         var url = read();
+        var media = document.querySelector('video');
         if (url) {
             clearInterval(timer);
             post({url: url});
+        } else if (media && media.src && media.src.indexOf('blob:') === 0 && ++blobSeen > 5) {
+            clearInterval(timer);
+            post({error: 'live'});
         } else if (attempts % 10 === 0) {
-            post({waiting: document.title, video: !!document.querySelector('video')});
+            post({waiting: document.title, src: media && media.src});
         }
         if (++attempts > 120) {
             clearInterval(timer);
@@ -76,7 +81,7 @@ const WatchPageResolver: React.FC<WatchPageResolverProps> = ({watchUrl, onResolv
             if (payload.url) {
                 onResolved(payload.url);
             } else if (payload.error) {
-                onFailed();
+                onFailed(payload.error === 'live' ? 'live' : undefined);
             }
         } catch (_) {
         }
@@ -104,7 +109,7 @@ const WatchPageResolver: React.FC<WatchPageResolverProps> = ({watchUrl, onResolv
 
     return (
         <Portal>
-            <Dialog visible={true} onDismiss={onFailed} style={styles.dialog}>
+            <Dialog visible={true} onDismiss={() => onFailed()} style={styles.dialog}>
                 <Dialog.Title>{i18n.t('open_page_to_continue')}</Dialog.Title>
                 <Dialog.Content style={styles.content}>
                     <Text variant="bodySmall" style={{color: theme.colors.onSurfaceVariant}}>
@@ -113,7 +118,7 @@ const WatchPageResolver: React.FC<WatchPageResolverProps> = ({watchUrl, onResolv
                     <View style={styles.webviewFrame}>{webview}</View>
                 </Dialog.Content>
                 <Dialog.Actions>
-                    <Button onPress={onFailed}>{i18n.t('cancel')}</Button>
+                    <Button onPress={() => onFailed()}>{i18n.t('cancel')}</Button>
                 </Dialog.Actions>
             </Dialog>
         </Portal>

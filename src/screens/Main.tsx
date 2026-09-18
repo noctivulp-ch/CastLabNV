@@ -217,7 +217,8 @@ const MainContent: React.FC = () => {
     // Enhanced media casting handler with autoplay support
     useEffect(() => {
         (async () => {
-            if (cast?.currentAsset) {
+            // The effect runs again once a device connects
+            if (cast?.currentAsset && connectedDevice) {
                 let uri;
                 const asset: Asset = cast.currentAsset;
                 // A web address is already reachable
@@ -440,7 +441,12 @@ const MainContent: React.FC = () => {
                 await castManager.castMedia({
                     contentUrl: streamUrl,
                     contentType: 'video/mp2t',
-                    metadata: {title: 'Screen Share', type: 'movie', images: []},
+                    isLive: true,
+                    metadata: {
+                        title: 'Screen Share',
+                        type: 'movie',
+                        images: [{url: `http://${ip}:${SERVER_PORT}/icon.png`}],
+                    },
                 });
                 showInfoToast(i18n.t('screen_share_started'));
             } catch (e) {
@@ -532,7 +538,12 @@ const MainContent: React.FC = () => {
                 await castManager.castMedia({
                     contentUrl: streamUrl,
                     contentType: 'audio/aac',
-                    metadata: {title: 'Audio Share', type: 'musicTrack', images: []},
+                    isLive: true,
+                    metadata: {
+                        title: 'Audio Share',
+                        type: 'musicTrack',
+                        images: [{url: `http://${ip}:${SERVER_PORT}/icon.png`}],
+                    },
                 });
                 showInfoToast(i18n.t('audio_share_started'));
             } catch (e) {

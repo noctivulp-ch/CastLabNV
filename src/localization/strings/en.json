@@ -200,6 +200,7 @@
   "no_videos_in_page_html": "No videos were found in the page's HTML. Videos loaded dynamically with JavaScript are not detected.",
   "please_enter_url": "Please enter a URL",
   "extraction_failed": "Extraction failed",
+  "live_not_supported": "Live streams cannot be extracted",
   "open_page_to_continue": "Open the page to continue",
   "open_page_to_continue_hint": "This page needs a step from you before it shows the video. The link is picked up automatically once it loads.",
   "please_connect_cast_device": "Please connect to a cast device first",

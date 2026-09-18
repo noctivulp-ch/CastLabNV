@@ -872,7 +872,7 @@ const PlayerController: React.FC<PlayerControllerProps> = ({
                                     )}
                                 </View>
 
-                                {!isImageMedia() && (
+                                {!isImageMedia() && !castManager.isLive() && (
                                     <>
                                         <View style={styles.progressSection}>
                                             <View style={styles.timeContainer}>

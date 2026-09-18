@@ -901,9 +901,9 @@ const VideoExtractorScreen: React.FC<VideoExtractorScreenProps> = ({
                     setVideos([VideoExtractorService.videoFromResolvedSource(sourceUrl, url.trim())]);
                     setError(undefined);
                 }}
-                onFailed={() => {
+                onFailed={(reason) => {
                     setResolverUrl(undefined);
-                    setError(i18n.t('extraction_failed'));
+                    setError(i18n.t(reason === 'live' ? 'live_not_supported' : 'extraction_failed'));
                 }}
             />
         </View>

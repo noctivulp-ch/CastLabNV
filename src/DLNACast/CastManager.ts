@@ -86,6 +86,13 @@ export class CastManager extends EventEmitter {
         return this.currentDevice !== null;
     }
 
+    /**
+     * A share has no end and no position to seek to
+     */
+    isLive(): boolean {
+        return this.currentMediaInfo?.isLive === true;
+    }
+
     hasMediaItemEndSupport(): boolean {
         return this.fcastClient?.supportsMediaItemEnd ?? false;
     }
