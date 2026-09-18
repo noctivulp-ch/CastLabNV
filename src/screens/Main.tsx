@@ -400,8 +400,8 @@ const MainContent: React.FC = () => {
      * Handle cast button press - connect/disconnect or show device list
      */
     const buttonCastPressed = async () => {
-        // Same source as the icon, or the two can disagree
-        if (isConnected) {
+        // The manager is asked, a stale context would leave no way back
+        if (castManager.isConnected()) {
             try {
                 await castManager.disconnect();
 

@@ -62,8 +62,9 @@ const CustomAppBar: React.FC<NativeStackHeaderProps & CustomAppBarProps> = ({
         title = i18n.t('theme_customizer');
     }
 
-    const {isConnected, connectedDevice} = useCastManager();
-    const castIcon = isConnected ? "cast-connected" : "cast";
+    const {isConnected, connectedDevice, castManager} = useCastManager();
+    // The context can lag behind a link that dropped on its own
+    const castIcon = isConnected && castManager.isConnected() ? "cast-connected" : "cast";
 
     // A renderer that accepts no video cannot display a shared screen
     const screenShareSupported = CastUtils.mediaSupportOf(connectedDevice).video;
