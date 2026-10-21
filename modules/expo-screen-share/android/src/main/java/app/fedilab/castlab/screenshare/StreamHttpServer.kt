@@ -38,6 +38,12 @@ class StreamHttpServer(private val port: Int) {
     private fun handleClient(socket: Socket) {
         Thread {
             try {
+                // Sin esto, Nagle retiene los envíos pequeños esperando a
+                // juntarlos con los siguientes. Los paquetes de audio salen
+                // cada 23 ms y comparten socket con el vídeo, así que esa
+                // espera se paga en latencia de todo el stream.
+                socket.tcpNoDelay = true
+
                 val input = socket.getInputStream().bufferedReader()
                 // Consume HTTP request
                 var line = input.readLine()
@@ -73,6 +79,12 @@ class StreamHttpServer(private val port: Int) {
         }.start()
     }
 
+    /**
+     * Vídeo y audio empujan desde hilos distintos. Sin sincronizar, dos
+     * escrituras se entrelazan dentro del mismo chunk HTTP y rompen el
+     * framing: el receptor ve el stream corrupto y corta la reproducción.
+     */
+    @Synchronized
     fun pushData(data: ByteArray) {
         if (clients.isEmpty()) return
         val chunk = "${data.size.toString(16)}\r\n".toByteArray() + data + "\r\n".toByteArray()

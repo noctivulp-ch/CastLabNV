@@ -1,5 +1,6 @@
 package app.fedilab.castlab.screenshare
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
@@ -26,10 +27,15 @@ class ScreenShareModule : Module() {
                 ?: throw Exception("No current activity")
 
             pendingPort = port
-            val mpManager = activity.getSystemService(Activity.MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
-            val captureIntent = mpManager.createScreenCaptureIntent()
-            activity.startActivityForResult(captureIntent, REQUEST_CODE)
+            // Ask for RECORD_AUDIO first so the very first session can already
+            // carry sound; the capture prompt follows either way, since a
+            // denied microphone permission only means a video-only stream.
+            requestAudioPermission {
+                val mpManager = activity.getSystemService(Activity.MEDIA_PROJECTION_SERVICE)
+                        as MediaProjectionManager
+                val captureIntent = mpManager.createScreenCaptureIntent()
+                activity.startActivityForResult(captureIntent, REQUEST_CODE)
+            }
         }
 
         OnActivityResult { _, payload ->
@@ -57,6 +63,28 @@ class ScreenShareModule : Module() {
 
         Function("isScreenSharing") {
             isSharing
+        }
+    }
+
+    /**
+     * Requests RECORD_AUDIO and runs [next] once the user has answered, or
+     * immediately when the permission is already granted or unavailable
+     * (pre-Android 10, where playback capture does not exist).
+     */
+    private fun requestAudioPermission(next: () -> Unit) {
+        val permissions = appContext.permissions
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || permissions == null) {
+            next()
+            return
+        }
+        try {
+            permissions.askForPermissions(
+                { next() },
+                Manifest.permission.RECORD_AUDIO
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not request RECORD_AUDIO: ${e.message}")
+            next()
         }
     }
 

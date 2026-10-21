@@ -13,6 +13,9 @@ module.exports = function withScreenShare(config) {
         };
         addPermission('android.permission.FOREGROUND_SERVICE');
         addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION');
+        // Playback capture (Android 10+) rides on the same MediaProjection
+        // token, but still needs RECORD_AUDIO granted at runtime.
+        addPermission('android.permission.RECORD_AUDIO');
         manifest['uses-permission'] = permissions;
 
         // Add service declaration

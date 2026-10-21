@@ -1,10 +1,12 @@
 package app.fedilab.castlab.screenshare
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -24,6 +26,7 @@ class ScreenCaptureService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: ScreenEncoder? = null
+    private var audioEncoder: AudioEncoder? = null
     private var httpServer: StreamHttpServer? = null
 
     @Volatile
@@ -87,12 +90,22 @@ class ScreenCaptureService : Service() {
         encoder = ScreenEncoder(width, height)
         encoder!!.init()
 
+        // Init audio capture. It must be decided before the first PMT goes
+        // out: the muxer only advertises an audio stream if capture is really
+        // running, so a denied permission or a pre-Q device still produces a
+        // valid video-only stream.
+        audioEncoder = createAudioEncoder(encoder!!.tsMuxer)
+        encoder!!.tsMuxer.hasAudio = audioEncoder != null
+
         // Init HTTP server
         httpServer = StreamHttpServer(port)
         httpServer!!.start()
 
         // Wire encoder output to HTTP server
         encoder!!.setOutputCallback { tsPackets ->
+            httpServer!!.pushData(tsPackets)
+        }
+        audioEncoder?.setOutputCallback { tsPackets ->
             httpServer!!.pushData(tsPackets)
         }
 
@@ -106,16 +119,41 @@ class ScreenCaptureService : Service() {
         )
 
         encoder!!.start()
+        audioEncoder?.start()
         active = true
-        Log.i(TAG, "Screen capture started: ${width}x${height} on port $port")
+        Log.i(TAG, "Screen capture started: ${width}x${height} on port $port" +
+                if (audioEncoder != null) " with audio" else " (video only)")
+    }
+
+    /**
+     * Playback capture needs API 29 and RECORD_AUDIO. Returns null — and the
+     * stream stays video-only — when either is missing or the codec refuses
+     * to initialize.
+     */
+    private fun createAudioEncoder(muxer: TsMuxer): AudioEncoder? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.i(TAG, "Audio capture needs Android 10+; streaming video only")
+            return null
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.i(TAG, "RECORD_AUDIO not granted; streaming video only")
+            return null
+        }
+        val projection = mediaProjection ?: return null
+        val audio = AudioEncoder(projection, muxer)
+        return if (audio.init()) audio else null
     }
 
     private fun stopCapture() {
         active = false
+        audioEncoder?.stop()
         encoder?.stop()
         virtualDisplay?.release()
         mediaProjection?.stop()
         httpServer?.stop()
+        audioEncoder = null
         encoder = null
         virtualDisplay = null
         mediaProjection = null
