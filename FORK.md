@@ -25,6 +25,8 @@ Desde la 1.6.0, el original trae su propio modo de **compartir solo audio** (iss
 distinto de este: ese modo no añade audio a compartir pantalla. Unir los dos sobre la 1.6.0 está
 pendiente.
 
+Detalle técnico: [FORK-audio.md](FORK-audio.md).
+
 ## Estado
 
 - Base actual: CastLab **1.5.0**.
