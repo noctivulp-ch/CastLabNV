@@ -1,4 +1,4 @@
-# CastLab Audio — fork de CastLab
+# CastLabNV — fork de CastLab
 
 Fork de [CastLab](https://codeberg.org/tom79/CastLab), de Thomas Schneider (tom79), publicado bajo
 la misma licencia: **GPL-3.0**. Todo el historial del original se conserva tal cual. Los cambios
@@ -30,7 +30,7 @@ Detalle técnico: [FORK-audio.md](FORK-audio.md).
 ## Estado
 
 - Base actual: CastLab **1.5.0**.
-- Pendiente: rebase sobre la 1.6.0, nombre propio («CastLab Audio») y `applicationId` propio
+- Pendiente: rebase sobre la 1.6.0, nombre propio («CastLabNV») y `applicationId` propio
   (`ch.noctivulp.castlab`), para poder tenerla instalada junto a la oficial. Después, releases
   con APK.
 
